@@ -75,9 +75,7 @@ class KuramotoSivashinsky(BilinearModel):
         return np.zeros(2 * self.nmodes)
 
     def linear(self, u: Vector) -> Vector:
-        linear_output = self._linear_factor * space_to_freq(u)
-        linear_output[0] = 0
-        return freq_to_space(linear_output)
+        return freq_to_space(self._linear_factor * space_to_freq(u))
 
     def bilinear(self, u: Vector, v: Vector) -> Vector:
         # a * b_x
