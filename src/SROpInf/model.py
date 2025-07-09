@@ -361,13 +361,25 @@ class BilinearReducedOrderModel(BilinearModel):
         self._bias = np.array(bias) if bias is not None else np.zeros(self._linear.shape[0])
         self.state_dim = self._linear.shape[0]
     
-    def full_to_latent(self, x: Vector) -> Vector:
+    def full_to_latent(self, x: ArrayLike) -> ArrayLike:
         """Convert full state x to latent state a."""
-        return self.test_basis.T @ (x - self.bias) / self.test_basis.shape[0]
-    
-    def latent_to_full(self, a: Vector) -> Vector:
+
+        if x.ndim == 1:
+            return self.test_basis.T @ (x - self.bias) / self.test_basis.shape[0]
+        elif x.ndim == 2:
+            return self.test_basis.T @ (x - self.bias[:, np.newaxis]) / self.test_basis.shape[0]
+        else:
+            raise ValueError("Input x must be 1D or 2D.")
+        
+    def latent_to_full(self, a: ArrayLike) -> ArrayLike:
         """Convert latent state a to full state x."""
-        return self.bias + self.trial_basis @ a
+        
+        if a.ndim == 1:
+            return self.bias + self.trial_basis @ a
+        elif a.ndim == 2:
+            return self.bias[:, np.newaxis] + self.trial_basis @ a
+        else:
+            raise ValueError("Input a must be 1D or 2D.")
     
     @property
     def constant_vector(self) -> Vector:
