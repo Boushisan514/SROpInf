@@ -119,7 +119,9 @@ def main():
     training_start_time = 120
     training_initial_condition_recorded = True
 
-    u = u_init
+    sol = np.loadtxt("ks_solution.txt")
+
+    # u = u_init
     
     # for t in range(Nt):
     #     if t % int(dt_snapshots / dt) == 0:
@@ -287,11 +289,12 @@ def main():
     time = start_time
     counter = 1
 
-    inner_product = np.array([SR_POD_Galerkin_ROM.test_inner_product(sol_SR_rom_fitted[:, 0], u_template)])
+    # inner_product = np.array([SR_POD_Galerkin_ROM.test_inner_product(sol_SR_rom_fitted[:, 0], u_template)])
 
-    print(f"t = {time}, dt = {timestep}, cdot_numer = {SR_POD_Galerkin_ROM.cdot_numerator}, cdot_denom = {SR_POD_Galerkin_ROM.cdot_denominator}, cdot = {shifting_speed}, c = {shifting_amount}, inner_product = {inner_product[-1]}.")
-  
     print("Computing SR-Galerkin ROM solution...")
+    # print(f"t = {time}, dt = {timestep}, cdot_numer = {SR_POD_Galerkin_ROM.cdot_numerator}, cdot_denom = {SR_POD_Galerkin_ROM.cdot_denominator}, cdot = {shifting_speed}, c = {shifting_amount}, inner_product = {inner_product[-1]}.")
+    print(f"t = {time}, dt = {timestep}, cdot_numer = {SR_POD_Galerkin_ROM.cdot_numerator}, cdot_denom = {SR_POD_Galerkin_ROM.cdot_denominator}, cdot = {shifting_speed}, c = {shifting_amount}.")
+  
 
     while time <= end_time:
         
@@ -324,9 +327,10 @@ def main():
         timestep = stepper_SR_rom.dt
         shifting_amount = shifting_speed * timestep_old + shifting_amount_old
         time += timestep
-        inner_product = np.append(inner_product, SR_POD_Galerkin_ROM.test_inner_product(SR_POD_Galerkin_ROM.latent_to_full(state), u_template))
+        # inner_product = np.append(inner_product, SR_POD_Galerkin_ROM.test_inner_product(SR_POD_Galerkin_ROM.latent_to_full(state), u_template))
 
-        print(f"t = {time}, dt = {timestep}, cdot_numer = {SR_POD_Galerkin_ROM.cdot_numerator}, cdot_denom = {SR_POD_Galerkin_ROM.cdot_denominator}, cdot = {shifting_speed}, c = {shifting_amount}, inner_product = {inner_product[-1]}.")
+        # print(f"t = {time}, dt = {timestep}, cdot_numer = {SR_POD_Galerkin_ROM.cdot_numerator}, cdot_denom = {SR_POD_Galerkin_ROM.cdot_denominator}, cdot = {shifting_speed}, c = {shifting_amount}, inner_product = {inner_product[-1]}.")
+        print(f"t = {time}, dt = {timestep}, cdot_numer = {SR_POD_Galerkin_ROM.cdot_numerator}, cdot_denom = {SR_POD_Galerkin_ROM.cdot_denominator}, cdot = {shifting_speed}, c = {shifting_amount}.")
 
         if not stepper_SR_rom.stability:
             
@@ -363,13 +367,13 @@ def main():
     plt.title(f"Kuramoto-Sivashinsky solution, L = {L}, ({N_rom} POD modes)")
     plt.show()
 
-    plt.plot(inner_product, label='Shifting Amount')
-    plt.xlabel('Time')
-    plt.ylabel('Shifting Amount')
-    plt.title('Shifting Amount Over Time')
-    plt.grid()
-    plt.legend()
-    plt.show()
+    # plt.plot(inner_product, label='Shifting Amount')
+    # plt.xlabel('Time')
+    # plt.ylabel('Shifting Amount')
+    # plt.title('Shifting Amount Over Time')
+    # plt.grid()
+    # plt.legend()
+    # plt.show()
 
     relative_error = np.linalg.norm(sol_SR_rom - sol) / np.linalg.norm(sol)
     print(f"Relative error of the symmetry-reduced ROM: {relative_error:.4e}")

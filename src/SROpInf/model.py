@@ -137,7 +137,7 @@ class BilinearModel(SemiLinearModel):
     def constant(self) -> Vector:
         """Return the constant term d."""
         return self._constant
-
+    
     def linear(self, x: Vector) -> Vector:
         """Evaluate the linear term B x"""
         return self._linear.dot(x)
@@ -149,7 +149,7 @@ class BilinearModel(SemiLinearModel):
     def bilinear(self, a: Vector, b: Vector) -> Vector:
         """Evaluate the bilinear term H(a, b)"""
         return self._bilinear.dot(a).dot(b)
-
+    
     def nonlinear(self, x: Vector) -> Vector:
         return self.constant + self.bilinear(x, x)
 
