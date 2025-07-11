@@ -7,6 +7,26 @@ from SROpInf.custom_typing import Vector
 
 from SROpInf.models.ks import KuramotoSivashinsky, freq_to_space, space_to_freq, spatial_translation
 
+# def freq_to_space(yf):
+#     nmodes = len(yf) - 1
+#     return 2 * nmodes * np.fft.irfft(yf)
+
+# def space_to_freq(y):
+#     nmodes = len(y) // 2
+#     return np.fft.rfft(y) / (2 * nmodes)
+
+# def spatial_translation(y, c, Lx):
+    
+#     # This function converts a given spatial function q(x) to q(x + c) by manipulating the Fourier coefficients
+    
+#     y_freq = space_to_freq(y)
+    
+#     y_freq = y_freq * np.exp(1j * c * (2*np.pi/Lx) * np.arange(len(y_freq)))
+
+#     y_shifted = freq_to_space(y_freq)
+    
+#     return y_shifted
+
 def template_fitting(sol: ArrayLike, sol_template: Vector, L: float, N: int, dx: float) -> ArrayLike:
 
         if sol.ndim == 1 or sol.shape[1] == 1:
@@ -119,25 +139,27 @@ def main():
     training_start_time = 120
     training_initial_condition_recorded = True
 
-    u = u_init.copy()
+    u = u_init
     
-    for t in range(Nt):
-        if t % int(dt_snapshots / dt) == 0:
-            sol[:, t // int(dt_snapshots / dt)] = u
-            print("snapshot %4d / %4d" % (t // int(dt_snapshots / dt), N_snapshots))
-            if not training_initial_condition_recorded and T[t // int(dt_snapshots / dt)] >= training_start_time:
-                print("recording training initial condition")
-                np.savetxt(f"ks_initial_condition_{training_start_time}.txt", u)
-                training_initial_condition_recorded = True
-        u = stepper_FOM.step(u)
+    # for t in range(Nt):
+    #     if t % int(dt_snapshots / dt) == 0:
+    #         sol[:, t // int(dt_snapshots / dt)] = u
+    #         print("snapshot %4d / %4d" % (t // int(dt_snapshots / dt), N_snapshots))
+    #         if not training_initial_condition_recorded and T[t // int(dt_snapshots / dt)] >= training_start_time:
+    #             print("recording training initial condition")
+    #             np.savetxt(f"ks_initial_condition_{training_start_time}.txt", u)
+    #             training_initial_condition_recorded = True
+    #     u = stepper_FOM.step(u)
 
-    fig, ax = plt.subplots()
-    ax.contourf(x, T, sol.T)
-    ax.set_xlim(0, L)
-    ax.set_xlabel("x")
-    ax.set_ylabel("t")
-    ax.set_title(f"Kuramoto-Sivashinsky solution, L = {L}, ({nmodes} modes)")
-    plt.show()
+    # fig, ax = plt.subplots()
+    # ax.contourf(x, T, sol.T)
+    # ax.set_xlim(0, L)
+    # ax.set_xlabel("x")
+    # ax.set_ylabel("t")
+    # ax.set_title(f"Kuramoto-Sivashinsky solution, L = {L}, ({nmodes} modes)")
+    # plt.show()
+
+    # np.savetxt("ks_solution.txt", sol)
 
     # endregion
     
@@ -165,7 +187,7 @@ def main():
     # timestep = stepper_rom.dt
     # state_old = state
     
-    # print("Computing ROM solution...")
+    # print("Computing standard Galerkin ROM solution...")
 
     # while time <= end_time:
         
@@ -220,7 +242,11 @@ def main():
 
     u_template = np.cos(x)
 
+    sol = np.loadtxt("ks_solution.txt")
+
     sol_fitted, sol_shifting_amount_FOM = template_fitting(sol, u_template, L, Nx, dx)
+
+    print(f"last shifting amount: {sol_shifting_amount_FOM[-1]}")
 
     plt.contourf(x, T, sol_fitted.T)
     plt.xlim(0, L)
@@ -254,6 +280,11 @@ def main():
     plt.show()
 
     SR_POD_Galerkin_ROM = FOM.symmetry_reduced_project(V = basis, template = u_template, W = None, bias = ubar)
+    
+    sol_fitted_projection = SR_POD_Galerkin_ROM.latent_to_full(SR_POD_Galerkin_ROM.full_to_latent(sol_fitted))
+
+    projection_error = np.linalg.norm(sol_fitted - sol_fitted_projection) / np.linalg.norm(sol_fitted)
+    print(f"Projection error: {projection_error:.4e}")
 
     stepper_SR_rom = SR_POD_Galerkin_ROM.get_timestepper(method = "rkf45", dt = dt, err_tol = 1e-6)
 
@@ -280,7 +311,7 @@ def main():
 
     print(f"t = {time}, dt = {timestep}, cdot_numer = {SR_POD_Galerkin_ROM.cdot_numerator}, cdot_denom = {SR_POD_Galerkin_ROM.cdot_denominator}, cdot = {shifting_speed}, c = {shifting_amount}, inner_product = {inner_product[-1]}.")
   
-    print("Computing ROM solution...")
+    print("Computing SR-Galerkin ROM solution...")
 
     while time <= end_time:
         
@@ -364,7 +395,6 @@ def main():
     print(f"Relative error of the symmetry-reduced ROM: {relative_error:.4e}")
 
     # endregion
-    
 
 if __name__ == "__main__":
     main()

@@ -282,7 +282,7 @@ class BilinearModel(SemiLinearModel):
                 bias_dx = self.derivative(bias, order = 1)
         else:
             raise NotImplementedError("Can't do symmetry reduction because the spatial derivative method is not implemented in the FOM.")
-            
+        
         Phi = V
         Phi_dx = V_dx
         Psi = np.linalg.solve((V.T @ W).T, W.T).T * N
@@ -328,15 +328,15 @@ class BilinearModel(SemiLinearModel):
             s_proj[i] = np.dot(Phi_dx[:, i], template_dx) / len(template_dx)
             for j in range(n):
                 Q_proj[i, j] = np.dot(bilinear_component[:, i, j], template_dx) / len(template_dx)
-                M_proj[i, j] = np.dot(Phi_dx[:, i], Psi[:, j]) / len(Phi_dx[:, i])
+                M_proj[i, j] = np.dot(Phi_dx[:, j], psi_i) / len(psi_i)
 
         SRBilinearGalerkinROM = SymmetryReducedBilinearGalerkinROM(d_proj, B_proj, H_proj, Phi, Psi, bias,
                e_proj, p_proj, Q_proj, w_proj, s_proj, n_proj, M_proj)
         
-        for attr in ['derivative']:  # add others here
-            if hasattr(self, attr):
-                setattr(SRBilinearGalerkinROM, attr, getattr(self, attr))
-        return SRBilinearGalerkinROM
+        # for attr in ['derivative']:  # add others here
+        #     if hasattr(self, attr):
+        #         setattr(SRBilinearGalerkinROM, attr, getattr(self, attr))
+        # return SRBilinearGalerkinROM
 
 class BilinearReducedOrderModel(BilinearModel):
     """ROMs for the BilinearModel where the right-hand side is a bilinear function of the reduced state
@@ -440,8 +440,6 @@ class SymmetryReducedBilinearGalerkinROM(BilinearReducedOrderModel):
 
         self.shifting_speed_denom_threshold = 1e-6
 
-        self.cdot = 0.0  # Initialize shifting speed
-
     @property
     def shifting_speed_numer_constant(self) -> float:
         """Return the numerator constant term e_proj in the numerator of the shifting speed"""
@@ -488,11 +486,11 @@ class SymmetryReducedBilinearGalerkinROM(BilinearReducedOrderModel):
     def nonlinear(self, a: Vector) -> Vector:
         """Return the nonlinear part N(a) = d_proj + B_proj a + H_proj(a, a) - cdot * (n_proj + M_proj a)"""
         cdot = self.compute_shifting_speed(a)
-        return self.constant_vector + self.bilinear(a, a) - cdot * (self.spatial_derivative_constant_vector + np.dot(self.spatial_derivative_linear_matrix, a))
+        return self.constant_vector + self.bilinear(a, a) - cdot * (self.spatial_derivative_constant_vector + self.spatial_derivative_linear_matrix @ a)
     
-    def test_inner_product(self, u: Vector, u_template: Vector) -> float:
-        """According to the symmetry reduction, the inner product is constrained to be:
-        <u_dx, u_template_dx> = 0, where u is the template-fitted solution"""
+    # def test_inner_product(self, u: Vector, u_template: Vector) -> float:
+    #     """According to the symmetry reduction, the inner product is constrained to be:
+    #     <u_dx, u_template_dx> = 0, where u is the template-fitted solution"""
 
-        u_template_dx = self.derivative(u_template, order=1)
-        return np.dot(u, u_template_dx) / len(u)
+    #     u_template_dx = self.derivative(u_template, order=1)
+    #     return np.dot(u, u_template_dx) / len(u)
