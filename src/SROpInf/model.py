@@ -330,7 +330,7 @@ class BilinearModel(SemiLinearModel):
                 Q_proj[i, j] = np.dot(bilinear_component[:, i, j], template_dx) / len(template_dx)
                 M_proj[i, j] = np.dot(Phi_dx[:, j], psi_i) / len(psi_i)
 
-        SRBilinearGalerkinROM = SymmetryReducedBilinearGalerkinROM(d_proj, B_proj, H_proj, Phi, Psi, bias,
+        return SymmetryReducedBilinearGalerkinROM(d_proj, B_proj, H_proj, Phi, Psi, bias,
                e_proj, p_proj, Q_proj, w_proj, s_proj, n_proj, M_proj)
         
         # for attr in ['derivative']:  # add others here

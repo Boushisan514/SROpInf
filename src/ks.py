@@ -5,27 +5,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 from SROpInf.custom_typing import Vector
 
-from SROpInf.models.ks import KuramotoSivashinsky, freq_to_space, space_to_freq, spatial_translation
-
-# def freq_to_space(yf):
-#     nmodes = len(yf) - 1
-#     return 2 * nmodes * np.fft.irfft(yf)
-
-# def space_to_freq(y):
-#     nmodes = len(y) // 2
-#     return np.fft.rfft(y) / (2 * nmodes)
-
-# def spatial_translation(y, c, Lx):
-    
-#     # This function converts a given spatial function q(x) to q(x + c) by manipulating the Fourier coefficients
-    
-#     y_freq = space_to_freq(y)
-    
-#     y_freq = y_freq * np.exp(1j * c * (2*np.pi/Lx) * np.arange(len(y_freq)))
-
-#     y_shifted = freq_to_space(y_freq)
-    
-#     return y_shifted
+from SROpInf.models.ks import KuramotoSivashinsky, spatial_translation
 
 def template_fitting(sol: ArrayLike, sol_template: Vector, L: float, N: int, dx: float) -> ArrayLike:
 
