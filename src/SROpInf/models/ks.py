@@ -92,7 +92,8 @@ class KuramotoSivashinsky(BilinearModel):
 
     def bilinear(self, u: Vector, v: Vector) -> Vector:
         # a * b_x
-        bilinear_output = np.zeros(2 * self.nmodes, dtype=complex)
+        bilinear_output_udv = np.zeros(2 * self.nmodes, dtype=complex)
+        bilinear_output_vdu = np.zeros(2 * self.nmodes, dtype=complex)
 
         state_u = space_to_freq(u)
         state_v = space_to_freq(v)
@@ -104,9 +105,13 @@ class KuramotoSivashinsky(BilinearModel):
                 n_freq = p_freq - m_freq
                 n = n_freq + self.nmodes
                 if n_freq <= self.nmodes - 1 and n_freq >= -self.nmodes:
-                    bilinear_output[p] += - self._deriv_factor[m] * state_u[n] * state_v[m]
+                    bilinear_output_udv[p] += - self._deriv_factor[m] * state_u[n] * state_v[m]
+                    bilinear_output_vdu[p] += - self._deriv_factor[m] * state_v[n] * state_u[m]
 
-        bilinear_output[0] = 0  # ensure the Nyquist frequency mode is always zero to keep the solution real-valued     
+        bilinear_output_udv[0] = 0  # ensure the Nyquist frequency mode is always zero to keep the solution real-valued
+        bilinear_output_vdu[0] = 0
+
+        bilinear_output = (bilinear_output_udv + bilinear_output_vdu) / 2
 
         return freq_to_space(bilinear_output)
 
