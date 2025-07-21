@@ -1,21 +1,26 @@
 """model - Define how a given state evolves in time."""
 
+from numbers import Number
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Callable, Optional, Union
 
 import numpy as np
+from torch import Tensor, einsum
 from numpy.typing import ArrayLike
 from scipy.linalg import lu_factor, lu_solve
 
 from .timestepper import Timestepper, AdaptiveTimestepper, SemiImplicit
-from .custom_typing import Vector, Matrix, Rank3Tensor, VectorField, VectorList
+from .custom_typing import Vector, Matrix, VectorField, VectorList
 
 __all__ = ["LUSolver", "Model", "SemiLinearModel", "BilinearModel", "duplicate_free_quadratic_vector"]
 
 def inner_product(a: Vector, b: Vector) -> float:
     """Compute the inner product of two vectors."""
     return np.dot(a, np.conj(b)) / len(a)
+
+def is_scalar(x):
+    return isinstance(x, (Number, np.generic)) or (isinstance(x, Tensor) and x.ndim == 0)
 
 def duplicate_free_quadratic_vector(v: Union[Vector, ArrayLike]) -> Union[Vector, ArrayLike]:   
     """Return a vector with duplicate entries removed, keeping the first occurrence.
@@ -151,10 +156,10 @@ class BilinearModel(SemiLinearModel):
         H(array_like): rank-3 tensor describing the bilinear map H
     """
 
-    def __init__(self, d: Vector, B: Matrix, H: Rank3Tensor):
+    def __init__(self, d: Vector, A: Matrix, B: Matrix):
         self._constant = d
-        self._linear = B
-        self._bilinear = H
+        self._linear = A
+        self._bilinear = B
 
     @property
     def constant(self) -> Vector:
@@ -221,8 +226,8 @@ class BilinearModel(SemiLinearModel):
 
         # Project constant term
         d_proj = np.zeros(n)
-        B_proj = np.zeros((n, n))
-        H_proj = np.zeros((n, n, n))
+        A_proj = np.zeros((n, n))
+        B_proj = np.zeros((n, n, n))
 
         constant_component = self.constant + self.linear(bias) + self.bilinear(bias, bias)
 
@@ -242,11 +247,11 @@ class BilinearModel(SemiLinearModel):
             psi_i = Psi[:, i]
             d_proj[i] = inner_product(constant_component, psi_i)
             for j in range(n):
-                B_proj[i, j] = inner_product(linear_component[:, j], psi_i)
+                A_proj[i, j] = inner_product(linear_component[:, j], psi_i)
                 for k in range(n):
-                    H_proj[i, j, k] = inner_product(bilinear_component[:, j, k], psi_i)
+                    B_proj[i, j, k] = inner_product(bilinear_component[:, j, k], psi_i)
 
-        return BilinearReducedOrderModel(Phi, Psi, bias, d_proj, B_proj, H_proj)
+        return BilinearReducedOrderModel(Phi, Psi, bias, d_proj, A_proj, B_proj)
 
     def symmetry_reduced_project(self, V: VectorList, template: Vector, W: Optional[VectorList] = None,
                                 bias: Optional[Vector] = None) -> "SymmetryReducedBilinearROM":
@@ -309,8 +314,8 @@ class BilinearModel(SemiLinearModel):
         Psi = np.linalg.solve((V.T @ W).T, W.T).T * N
 
         d_proj = np.zeros(n)
-        B_proj = np.zeros((n, n))
-        H_proj = np.zeros((n, n, n))
+        A_proj = np.zeros((n, n))
+        B_proj = np.zeros((n, n, n))
         p_proj = np.zeros((n))
         Q_proj = np.zeros((n, n))
         s_proj = np.zeros((n))
@@ -335,9 +340,9 @@ class BilinearModel(SemiLinearModel):
             psi_i = Psi[:, i]
             d_proj[i] = inner_product(constant_component, psi_i)
             for j in range(n):
-                B_proj[i, j] = inner_product(linear_component[:, j], psi_i)
+                A_proj[i, j] = inner_product(linear_component[:, j], psi_i)
                 for k in range(n):
-                    H_proj[i, j, k] = inner_product(bilinear_component[:, j, k], psi_i)
+                    B_proj[i, j, k] = inner_product(bilinear_component[:, j, k], psi_i)
 
         e_proj = inner_product(constant_component, template_dx)
         w_proj = inner_product(bias_dx, template_dx)
@@ -352,8 +357,8 @@ class BilinearModel(SemiLinearModel):
                 M_proj[i, j] = inner_product(Phi_dx[:, j], psi_i)
 
         SRBilinearGalerkinROM = SymmetryReducedBilinearROM(Phi, Psi, bias, w_proj, s_proj, n_proj, M_proj, 
-                                d_proj, B_proj, H_proj, e_proj, p_proj, Q_proj)
-        
+                                d_proj, A_proj, B_proj, e_proj, p_proj, Q_proj)
+
         for attr in ['derivative']:  # add others here
             if hasattr(self, attr):
                 setattr(SRBilinearGalerkinROM, attr, getattr(self, attr))
@@ -455,8 +460,8 @@ class BilinearReducedOrderModel(BilinearModel):
     """
 
     def __init__(self, Phi: ArrayLike, Psi: ArrayLike, bias: Vector, 
-                 d_rom: Vector, B_rom: Matrix, H_rom: Rank3Tensor):
-        super().__init__(d_rom, B_rom, H_rom)
+                 d_rom: Vector, A_rom: Matrix, B_rom: Matrix):
+        super().__init__(d_rom, A_rom, B_rom)
         self.Phi = np.array(Phi)
         self.Psi = np.array(Psi)
         self._bias = np.array(bias) if bias is not None else np.zeros(self._linear.shape[0])
@@ -481,43 +486,7 @@ class BilinearReducedOrderModel(BilinearModel):
             return self.bias[:, np.newaxis] + self.trial_basis @ a
         else:
             raise ValueError("Input a must be 1D or 2D.")
-    
-    @property
-    def constant_vector(self) -> Vector:
-        """Return the constant term d."""
-        return self._constant
-    
-    @constant_vector.setter
-    def constant_vector(self, value: Vector):
-        """Set the constant term d."""
-        if value.shape[0] != self.state_dim:
-            raise ValueError(f"Constant vector must have shape ({self.state_dim},), got {value.shape}.")
-        self._constant = value
-    
-    @property
-    def linear_matrix(self) -> Matrix:
-        """Return the linear matrix L."""
-        return self._linear
-    
-    @linear_matrix.setter
-    def linear_matrix(self, value: Matrix):
-        """Set the linear matrix L."""
-        if value.shape != (self.state_dim, self.state_dim):
-            raise ValueError(f"Linear matrix must have shape ({self.state_dim}, {self.state_dim}), got {value.shape}.")
-        self._linear = value
-    
-    @property
-    def bilinear_tensor(self) -> Rank3Tensor:
-        """Return the bilinear tensor B."""
-        return self._bilinear
-    
-    @bilinear_tensor.setter
-    def bilinear_tensor(self, value: Rank3Tensor):
-        """Set the bilinear tensor B."""
-        if value.shape != (self.state_dim, self.state_dim, self.state_dim):
-            raise ValueError(f"Bilinear tensor must have shape ({self.state_dim}, {self.state_dim}, {self.state_dim}), got {value.shape}.")
-        self._bilinear = value
-    
+  
     @property
     def trial_basis(self) -> Matrix:
         """Return the trial basis Phi, x = bias + Phi z"""
@@ -571,115 +540,169 @@ class SymmetryReducedBilinearROM(BilinearReducedOrderModel):
 
     def __init__(self, Phi: ArrayLike, Psi: ArrayLike, bias: Vector,
                  w_rom: float, s_rom: Vector, n_rom: Vector, M_rom: Matrix,
-                 d_rom: Vector, B_rom: Matrix, H_rom: Rank3Tensor,
+                 d_rom: Vector, A_rom: Matrix, B_rom: Matrix,
                  e_rom: float, p_rom: Vector, Q_rom: Matrix):
-        super().__init__(Phi, Psi, bias, d_rom, B_rom, H_rom)
-        self.e_rom = e_rom
-        self.p_rom = p_rom
-        self.Q_rom = Q_rom
-        self.w_rom = w_rom
-        self.s_rom = s_rom
-        self.n_rom = n_rom
-        self.M_rom = M_rom
+        super().__init__(Phi, Psi, bias, d_rom, A_rom, B_rom)
+        self._cdot_numer_constant = e_rom
+        self._cdot_numer_linear = p_rom
+        self._cdot_numer_bilinear = Q_rom
+        self._cdot_denom_constant = w_rom
+        self._cdot_denom_linear = s_rom
+        self._udx_constant = n_rom
+        self._udx_linear = M_rom
 
         self.shifting_speed_denom_threshold = 1e-6
 
     @property
-    def shifting_speed_numer_constant(self) -> float:
+    def constant(self) -> Union[Vector, Tensor]:
+        """Return the constant term d_rom."""
+        return self._constant
+
+    @constant.setter
+    def constant(self, value: Union[Vector, Tensor]):
+        """Set the constant term d_rom."""
+        if value.shape[0] != self.state_dim:
+            raise ValueError(f"Constant term must have shape ({self.state_dim},), got {value.shape}.")
+        self._constant = value
+
+    @property
+    def linear_mat(self) -> Union[Matrix, Tensor]:
+        """Return the linear term p_rom."""
+        return self._linear
+
+    @linear_mat.setter
+    def linear_mat(self, value: Union[Matrix, Tensor]):
+        """Set the linear term p_rom."""
+        if value.shape[0] != self.state_dim:
+            raise ValueError(f"Linear term must have shape ({self.state_dim}, {self.state_dim}), got {value.shape}.")
+        self._linear = value
+
+    def linear(self, a: Union[Vector, Tensor]) -> Union[Vector, Tensor]:
+        """Evaluate the linear term L_rom x,
+        First we check the shapes, then we check the types"""
+        if self.linear_mat.shape[1] != a.shape[0]:
+                raise ValueError(f"Incompatible shapes: {self.linear_mat.shape} @ {a.shape}")
+        if isinstance(a, Vector) and isinstance(self.linear_mat, Matrix):
+            return self.linear_mat.dot(a)
+        elif isinstance(a, Tensor) and isinstance(self.linear_mat, Tensor):
+            return self.linear_mat @ a
+        else:
+            raise ValueError(f"Incompatible types for Aa: got a: {type(a)} and A: {type(self.linear_mat)}.")
+
+    @property
+    def bilinear_mat(self) -> Union[Matrix, Tensor]:
+        """Return the bilinear term B_rom"""
+        return self._bilinear
+
+    @bilinear_mat.setter
+    def bilinear_mat(self, value: Union[Matrix, Tensor]):
+        """Set the bilinear term B_rom"""
+        if value.shape != (self.state_dim, self.state_dim, self.state_dim):
+            raise ValueError(f"Bilinear term must have shape ({self.state_dim}, {self.state_dim}, {self.state_dim}), got {value.shape}.")
+        self._bilinear = value
+
+    def bilinear(self, a: Union[Vector, Tensor], b: Union[Vector, Tensor]) -> Union[Vector, Tensor]:
+        """Evaluate the bilinear term B_rom(a, b) = einsum('ijk,j,k->i', B, a, b)"""
+        if self.bilinear_mat.shape[1] != a.shape[0] or self.bilinear_mat.shape[2] != b.shape[0]:
+                raise ValueError(f"Incompatible shapes: {self.bilinear_mat.shape} with a: {a.shape}, b: {b.shape}")
+        if isinstance(a, Vector) and isinstance(b, Vector) and isinstance(self.bilinear_mat, Matrix):
+            return self.bilinear_mat.dot(a).dot(b)
+        elif isinstance(a, Tensor) and isinstance(b, Tensor) and isinstance(self.bilinear_mat, Tensor):
+            return einsum('ijk,j,k->i', self.bilinear_mat, a, b)
+        else:
+            raise ValueError(f"Incompatible types for B(a, b): got a: {type(a)}, b: {type(b)}, B: {type(self.bilinear_mat)}.")
+
+    @property
+    def cdot_numer_constant(self) -> Union[float, Tensor]:
         """Return the numerator constant term e_rom in the numerator of the shifting speed"""
-        return self.e_rom
+        return self._cdot_numer_constant
     
-    @shifting_speed_numer_constant.setter
-    def shifting_speed_numer_constant(self, value: float):
+    @cdot_numer_constant.setter
+    def cdot_numer_constant(self, value: Union[float, Tensor]):
         """Set the numerator constant term e_rom in the numerator of the shifting speed"""
         if not np.isscalar(value):
             raise ValueError(f"Numerator constant must be a scalar, got {value}.")
-        self.e_rom = value
+        self._cdot_numer_constant = value
 
     @property
-    def shifting_speed_numer_linear_vector(self) -> Vector:
-        """Return the linear term p_rom"""
-        return self.p_rom
+    def cdot_numer_linear(self) -> Union[Vector, Tensor]:
+        """Return the numerator linear term p_rom in the numerator of the shifting speed"""
+        return self._cdot_numer_linear
 
-    @shifting_speed_numer_linear_vector.setter
-    def shifting_speed_numer_linear_vector(self, value: Vector):
-        """Set the linear term p_rom"""
+    @cdot_numer_linear.setter
+    def cdot_numer_linear(self, value: Union[Vector, Tensor]):
+        """Set the numerator linear term p_rom in the numerator of the shifting speed"""
         if value.shape[0] != self.state_dim:
             raise ValueError(f"Numerator linear vector must have shape ({self.state_dim},), got {value.shape}.")
-        self.p_rom = value
+        self._cdot_numer_linear = value
 
     @property
-    def shifting_speed_numer_bilinear_matrix(self) -> Matrix:
-        """Return the bilinear term Q_rom"""
-        return self.Q_rom
-    
-    @shifting_speed_numer_bilinear_matrix.setter
-    def shifting_speed_numer_bilinear_matrix(self, value: Matrix):
-        """Set the bilinear term Q_rom"""
+    def cdot_numer_bilinear(self) -> Union[Matrix, Tensor]:
+        """Return the numerator bilinear term Q_rom in the numerator of the shifting speed"""
+        return self._cdot_numer_bilinear
+
+    @cdot_numer_bilinear.setter
+    def cdot_numer_bilinear(self, value: Union[Matrix, Tensor]):
+        """Set the numerator bilinear term Q_rom in the numerator of the shifting speed"""
         if value.shape != (self.state_dim, self.state_dim):
             raise ValueError(f"Numerator bilinear matrix must have shape ({self.state_dim}, {self.state_dim}), got {value.shape}.")
-        self.Q_rom = value
-
+        self._cdot_numer_bilinear = value
+    
     @property
-    def shifting_speed_denom_constant(self) -> float:
+    def cdot_denom_constant(self) -> Union[float, Tensor]:
         """Return the denominator constant term w_rom in the denominator of the shifting speed"""
-        return self.w_rom
+        return self._cdot_denom_constant
     
-    @shifting_speed_denom_constant.setter
-    def shifting_speed_denom_constant(self, value: float):
-        """Set the denominator constant term w_rom in the denominator of the shifting speed"""
-        if not np.isscalar(value):
-            raise ValueError(f"Denominator constant must be a scalar, got {value}.")
-        self.w_rom = value
+    @property
+    def cdot_denom_linear(self) -> Union[Vector, Tensor]:
+        """Return the denominator linear term s_rom in the denominator of the shifting speed"""
+        return self._cdot_denom_linear
 
     @property
-    def shifting_speed_denom_linear_vector(self) -> Vector:
-        """Return the linear term s_rom"""
-        return self.s_rom
-    
-    @shifting_speed_denom_linear_vector.setter
-    def shifting_speed_denom_linear_vector(self, value: Vector):
-        """Set the linear term s_rom"""
-        if value.shape[0] != self.state_dim:
-            raise ValueError(f"Denominator linear vector must have shape ({self.state_dim},), got {value.shape}.")
-        self.s_rom = value
-
-    @property
-    def spatial_derivative_constant_vector(self) -> Vector:
+    def udx_constant(self) -> Union[Vector, Tensor]:
         """Return the spatial derivative constant term n_rom"""
-        return self.n_rom
-    
-    @spatial_derivative_constant_vector.setter
-    def spatial_derivative_constant_vector(self, value: Vector):
-        """Set the spatial derivative constant term n_rom"""
-        if value.shape[0] != self.state_dim:
-            raise ValueError(f"Spatial derivative constant vector must have shape ({self.state_dim},), got {value.shape}.")
-        self.n_rom = value
+        return self._udx_constant
     
     @property
-    def spatial_derivative_linear_matrix(self) -> Matrix:
+    def udx_linear(self) -> Union[Matrix, Tensor]:
         """Return the spatial derivative linear term M_rom"""
-        return self.M_rom
-    
-    @spatial_derivative_linear_matrix.setter
-    def spatial_derivative_linear_matrix(self, value: Matrix):
-        """Set the spatial derivative linear term M_rom"""
-        if value.shape != (self.state_dim, self.state_dim):
-            raise ValueError(f"Spatial derivative linear matrix must have shape ({self.state_dim}, {self.state_dim}), got {value.shape}.")
-        self.M_rom = value
-    
-    def compute_shifting_speed(self, a: Vector) -> float:
-        self.cdot_numerator = self.shifting_speed_numer_constant + np.dot(self.shifting_speed_numer_linear_vector, a) + np.dot(a, np.dot(self.shifting_speed_numer_bilinear_matrix, a))
-        self.cdot_denominator = self.shifting_speed_denom_constant + np.dot(self.shifting_speed_denom_linear_vector, a)
-        if np.abs(self.cdot_denominator) < self.shifting_speed_denom_threshold:
-            raise ValueError(f"Denominator in shifting speed is less than {self.shifting_speed_denom_threshold}, cannot compute cdot.")
-        else:
-            return - self.cdot_numerator / self.cdot_denominator
+        return self._udx_linear
 
-    def nonlinear(self, a: Vector) -> Vector:
+    def udx(self, a: Union[Vector, Tensor]) -> Union[Vector, Tensor]:
+        """Evaluate the spatial derivative term: n_rom + M_rom @ a, supporting both NumPy and Torch."""
+        if self.udx_linear.shape[1] != a.shape[0] or self.udx_constant.shape[0] != a.shape[0]:
+                raise ValueError(f"Incompatible shapes: {self.udx_linear.shape} @ {a.shape} + {self.udx_constant.shape}")
+        if isinstance(a, Vector) and isinstance(self.udx_constant, Vector) and isinstance(self.udx_linear, Matrix):
+            return self.udx_constant + self.udx_linear @ a
+        elif isinstance(a, Tensor) and isinstance(self.udx_linear, Tensor) and isinstance(self.udx_constant, Tensor):
+            return self.udx_constant + self.udx_linear @ a
+        else:
+            raise TypeError(f"Incompatible types for (n + Ma): got a: {type(a)}, M: {type(self.udx_linear)}, n: {type(self.udx_constant)}.")
+
+    def shifting_speed(self, a: Union[Vector, Tensor]) -> Union[float, Tensor]:
+        if self.cdot_numer_linear.shape[0] != a.shape[0] or self.cdot_numer_bilinear.shape[0] != a.shape[0]:
+            raise ValueError(f"Incompatible shapes for cdot_numerator: {self.cdot_numer_linear.shape} @ {a.shape} + {self.cdot_numer_bilinear.shape}({a.shape}, {a.shape})")
+        if self.cdot_denom_linear.shape[0] != a.shape[0]:
+            raise ValueError(f"Incompatible shapes for cdot_denominator: {self.cdot_denom_linear.shape} @ {a.shape}")
+        
+        if isinstance(a, Vector) and isinstance(self.cdot_numer_constant, float) and isinstance(self.cdot_numer_linear, Vector) and isinstance(self.cdot_numer_bilinear, Matrix):
+            self.cdot_numerator   = self.cdot_numer_constant + self.cdot_numer_linear.dot(a) + self.cdot_numer_bilinear.dot(a).dot(a)
+        elif isinstance(a, Tensor) and isinstance(self.cdot_numer_constant, Tensor) and isinstance(self.cdot_numer_linear, Tensor) and isinstance(self.cdot_numer_bilinear, Tensor):
+            self.cdot_numerator   = self.cdot_numer_constant + self.cdot_numer_linear @ a + einsum('ij,j,k->i', self.cdot_numer_bilinear, a, a)
+        self.cdot_numerator   = self.cdot_numer_constant + self.cdot_numer_linear.dot(a) + self.cdot_numer_bilinear.dot(a).dot(a)
+        self.cdot_denominator = self.cdot_denom_constant + self.cdot_denom_linear.dot(a)
+        if np.abs(self.cdot_denominator) > self.shifting_speed_denom_threshold:
+            return - self.cdot_numerator / self.cdot_denominator
+        else:
+            raise ValueError(f"Denominator in shifting speed is less than {self.shifting_speed_denom_threshold}, cannot compute the shifting speed.")
+
+    def velocity(self, a: Union[Vector, Tensor]) -> Union[Vector, Tensor]:
+        # compute the velocity of the reduced state a without the additional symmetry-reducing term
+        return self.constant + self.linear(a) + self.bilinear(a, a)
+
+    def nonlinear(self, a: Union[Vector, Tensor]) -> Union[Vector, Tensor]:
         """Return the nonlinear part N(a) = d_rom + B_rom a + H_rom(a, a) + cdot * (n_rom + M_rom a)"""
-        cdot = self.compute_shifting_speed(a)
-        return self.constant_vector + self.bilinear(a, a) + cdot * (self.spatial_derivative_constant_vector + self.spatial_derivative_linear_matrix.dot(a))
+        return self.constant + self.bilinear(a, a) + self.shifting_speed(a) * self.udx(a)
 
     # def test_inner_product(self, u: Vector, u_template: Vector) -> float:
     #     """According to the symmetry reduction, the inner product is constrained to be:

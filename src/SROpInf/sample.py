@@ -197,7 +197,7 @@ def sample(num_traj: int, num_snapshots: int, u_init: ArrayLike, u_template: Vec
 
             sol[:, 0, idx_traj] = u_init_proj
             sol_fitted[:, 0, idx_traj] = u_init_fitted_proj
-            shifting_speed[0, idx_traj] = model.compute_shifting_speed(state)
+            shifting_speed[0, idx_traj] = model.shifting_speed(state)
 
             timestep_old = timestep
             state_old = state
@@ -242,7 +242,7 @@ def sample(num_traj: int, num_snapshots: int, u_init: ArrayLike, u_template: Vec
                 time += timestep_old
 
                 state = stepper.step(state)
-                cdot_new = model.compute_shifting_speed(state)
+                cdot_new = model.shifting_speed(state)
                 timestep = stepper.dt
 
                 if not stepper.stability:

@@ -91,7 +91,8 @@ class KuramotoSivashinsky(BilinearModel):
         return freq_to_space(self._linear_factor * space_to_freq(u))
 
     def bilinear(self, u: Vector, v: Vector) -> Vector:
-        # a * b_x
+        # symmetrized bilinear term
+        # B(u, v) = -1/2 (u_x v + u v_x), s.t. B(u, v) = B(v, u) and B(u, u) = -uu_x
         bilinear_output_udv = np.zeros(2 * self.nmodes, dtype=complex)
         bilinear_output_vdu = np.zeros(2 * self.nmodes, dtype=complex)
 

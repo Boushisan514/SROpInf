@@ -51,29 +51,29 @@ def main():
 
     FOM = KuramotoSivashinsky(nu, Nx, L)
 
-    FOM_data = sample(num_traj = num_traj, num_snapshots = N_snapshots, u_init = u_init, 
-                      u_template = u_template, spatial_translation = shifting_operation,
-                      model = FOM, timestepper = "rk3cn", timespan = end_time - start_time, timestep = dt)
+    # FOM_data = sample(num_traj = num_traj, num_snapshots = N_snapshots, u_init = u_init, 
+    #                   u_template = u_template, spatial_translation = shifting_operation,
+    #                   model = FOM, timestepper = "rk3cn", timespan = end_time - start_time, timestep = dt)
     
-    sol_FOM = FOM_data.sol[:, :, 0]
-    sol_fitted_FOM = FOM_data.sol_fitted[:, :, 0]
-    shifting_amount_FOM = FOM_data.shifting_amount[:, 0]
-    shifting_speed_FOM = FOM_data.shifting_speed[:, 0]
+    # sol_FOM = FOM_data.sol[:, :, 0]
+    # sol_fitted_FOM = FOM_data.sol_fitted[:, :, 0]
+    # shifting_amount_FOM = FOM_data.shifting_amount[:, 0]
+    # shifting_speed_FOM = FOM_data.shifting_speed[:, 0]
 
-    # np.savetxt("ks_initial_condition_120.txt", sol_FOM[:, int(120/dt_snapshots)])
+    # # np.savetxt("ks_initial_condition_120.txt", sol_FOM[:, int(120/dt_snapshots)])
 
-    fig, ax = plt.subplots()
-    ax.contourf(x, T, sol_FOM.T)
-    ax.set_xlim(0, L)
-    ax.set_xlabel("x")
-    ax.set_ylabel("t")
-    ax.set_title(f"Kuramoto-Sivashinsky solution, L = {L}, ({nmodes} Fourier modes)")
-    plt.show()
+    # fig, ax = plt.subplots()
+    # ax.contourf(x, T, sol_FOM.T)
+    # ax.set_xlim(0, L)
+    # ax.set_xlabel("x")
+    # ax.set_ylabel("t")
+    # ax.set_title(f"Kuramoto-Sivashinsky solution, L = {L}, ({nmodes} Fourier modes)")
+    # plt.show()
 
-    np.savetxt("ks_solution_FOM.txt", sol_FOM)
-    np.savetxt("ks_solution_fitted_FOM.txt", sol_fitted_FOM)
-    np.savetxt("ks_solution_shifting_amount_FOM.txt", shifting_amount_FOM)
-    np.savetxt("ks_solution_shifting_speed_FOM.txt", shifting_speed_FOM)
+    # np.savetxt("ks_solution_FOM.txt", sol_FOM)
+    # np.savetxt("ks_solution_fitted_FOM.txt", sol_fitted_FOM)
+    # np.savetxt("ks_solution_shifting_amount_FOM.txt", shifting_amount_FOM)
+    # np.savetxt("ks_solution_shifting_speed_FOM.txt", shifting_speed_FOM)
 
     # endregion
 
@@ -99,6 +99,9 @@ def main():
     sol_fitted_SR_Galerkin_ROM = SR_Galerkin_ROM_data.sol_fitted[:, :, 0]
     shifting_amount_SR_Galerkin_ROM = SR_Galerkin_ROM_data.shifting_amount[:, 0]
     shifting_speed_SR_Galerkin_ROM = SR_Galerkin_ROM_data.shifting_speed[:, 0]
+
+
+    print("SR-Galerkin ROM bilinear matrix: ", SR_Galerkin_ROM._bilinear)
 
     fig, ax = plt.subplots()
     ax.contourf(x, T, sol_SR_Galerkin_ROM.T)
