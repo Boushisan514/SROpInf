@@ -181,15 +181,17 @@ def main():
 
     ubar, POD_basis, POD_singular_values = POD(sol_fitted_FOM, num_modes)
 
-    FOM_data_re_proj = sample(num_traj = num_traj, num_snapshots = N_snapshots, u_init = u_init, 
-                      u_template = u_template, spatial_translation = shifting_operation,
-                      model = FOM, timestepper = "rk3cn", timespan = end_time - start_time, timestep = dt,
-                      re_proj_option = True, V = POD_basis, W = None, bias = ubar)
-    
-    FOM_data_re_proj.save("ks_solution_FOM_re_proj.npz")
+    FOM_data_re_proj = TrajectoryData.load("ks_solution_FOM_re_proj.npz")
 
+    # FOM_data_re_proj = sample(num_traj = num_traj, num_snapshots = N_snapshots, u_init = u_init, 
+    #                   u_template = u_template, spatial_translation = shifting_operation,
+    #                   model = FOM, timestepper = "rk3cn", timespan = end_time - start_time, timestep = dt,
+    #                   re_proj_option = True, V = POD_basis, W = None, bias = ubar)
+    
+    # FOM_data_re_proj.save("ks_solution_FOM_re_proj.npz")
+    
     SR_OpInf_ROM = FOM.symmetry_reduced_OpInf_initialization(V = POD_basis, template = u_template, W = None, bias = ubar)
-    SR_OpInf_ROM, training_loss = train_SROpInf(model = SR_OpInf_ROM, num_modes = num_modes, data = FOM_data_re_proj, ratio = 10,
+    SR_OpInf_ROM, training_loss = train_SROpInf(model = SR_OpInf_ROM, num_modes = num_modes, data = FOM_data_re_proj,
                                                 max_steps = 5000, grad_tol = 1e-6)
     
     SR_OpInf_ROM_data = sample(num_traj = num_traj, num_snapshots = N_snapshots, u_init = u_init,

@@ -709,7 +709,7 @@ class SymmetryReducedBilinearROM(BilinearReducedOrderModel):
         if isinstance(a, np.ndarray) and is_scalar(self.cdot_numer_constant) and isinstance(self.cdot_numer_linear, np.ndarray) and isinstance(self.cdot_numer_bilinear, np.ndarray):
             self.cdot_numerator = self.cdot_numer_constant + self.cdot_numer_linear.dot(a) + self.cdot_numer_bilinear.dot(a).dot(a)
         elif isinstance(a, Tensor) and is_scalar(self.cdot_numer_constant) and isinstance(self.cdot_numer_linear, Tensor) and isinstance(self.cdot_numer_bilinear, Tensor):
-            self.cdot_numerator   = self.cdot_numer_constant + self.cdot_numer_linear @ a + einsum('ij,jn,kn->n', self.cdot_numer_bilinear, a, a)
+            self.cdot_numerator   = self.cdot_numer_constant + self.cdot_numer_linear @ a + einsum('ij,in,jn->n', self.cdot_numer_bilinear, a, a)
         else:
             raise TypeError(f"Incompatible types for cdot_numerator: got a: {type(a)}, constant: {type(self.cdot_numer_constant)}, linear: {type(self.cdot_numer_linear)}, bilinear: {type(self.cdot_numer_bilinear)}.")
 

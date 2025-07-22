@@ -110,11 +110,6 @@ def train_SROpInf(model: SymmetryReducedBilinearROM,
         rhs_fitted_loss = torch.sum((rhs_fitted_rom - rhs_fitted_latent_batch) ** 2) # this loss function is then averaged over the number of batchwise snapshots only
         advection_loss = torch.sum((cdot_rom * dudx_fitted_latent_rom - cdot_batch * dudx_fitted_latent_batch) ** 2)
 
-        print("cdot_rom shape:", cdot_rom.shape)
-        print("dudx_fitted_latent_rom shape:", dudx_fitted_latent_rom.shape)
-        print("cdot_batch shape:", cdot_batch.shape)
-        print("dudx_fitted_latent_batch shape:", dudx_fitted_latent_batch.shape)
-
         regularizer = (reg_coeffs[0] * torch.norm(d_rom) ** 2
                        + reg_coeffs[1] * torch.norm(A_rom) ** 2
                        + reg_coeffs[2] * torch.norm(B_rom_duplicate_free) ** 2
@@ -124,7 +119,9 @@ def train_SROpInf(model: SymmetryReducedBilinearROM,
 
         loss = rhs_fitted_loss + ratio * advection_loss + regularizer
         loss.backward()
-        print("velocity loss:", rhs_fitted_loss.item(), "advection loss", advection_loss.item(), "Regularizer loss:", regularizer.item())
+        print("velocity loss:", rhs_fitted_loss.item(),
+              "advection loss", advection_loss.item(),
+              "Regularizer loss:", regularizer.item())
         return loss
 
     # Step 3: Training loop
