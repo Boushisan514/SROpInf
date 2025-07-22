@@ -1,43 +1,49 @@
-import pickle
 import torch
-import numpy as np
 from torch.utils.data import DataLoader
-import torch.nn.functional as F
+from torch import Tensor
 import matplotlib.pyplot as plt
-from typing import List, Tuple, Callable
+from typing import List, Callable
 
-from numpy.typing import ArrayLike, NDArray
-
-from .custom_typing import Vector
-from .model import SymmetryReducedQuadraticOpInfROM, duplicate_free_quadratic_vector
+from .model import SymmetryReducedBilinearROM
 from .sample import TrajectoryData
 
 __all__ = ["train_SROpInf"]
 
-def full_to_latent_rhs(dxdt: torch.Tensor, test_basis: torch.Tensor) -> torch.Tensor:
+def reconstruct_symmetric_rank3matrix(H_unique: Tensor, nmodes: int) -> Tensor:
     """
-    Project full-state time derivative dx/dt to latent state's derivative da/dt.
-
-    Args:
-        dxdt: Full-state derivative. Shape (N_x,) or (N_x, N_t)
-
-    Returns:
-        Latent-state derivative. Shape (N_r,) or (N_r, N_t)
+    Reconstructs full H[i,j,k] tensor from H_unique[i,:], where each H[i,:,:] is symmetric.
+    H_unique: shape (n, n(n+1)//2)
+    Returns H: shape (n, n, n) with H[i,j,k] = H[i,k,j]
     """
-    if dxdt.ndim not in (1, 2):
-        raise ValueError("Input dxdt must be 1D or 2D.")
-    
-    return test_basis.T @ dxdt / test_basis.shape[0]
+    H = torch.zeros((nmodes, nmodes, nmodes), dtype=H_unique.dtype, device=H_unique.device)
+    triu_i, triu_j = torch.triu_indices(nmodes, nmodes)  # indices of upper triangle
 
-def train_SROpInf(model: SymmetryReducedQuadraticOpInfROM,
+    for i in range(nmodes):
+        H[i, triu_i, triu_j] = H_unique[i]
+        H[i, triu_j, triu_i] = H_unique[i]  # fill symmetric lower triangle
+
+    return H
+
+def reconstruct_symmetric_matrix(Q_unique: Tensor, nmodes: int) -> Tensor:
+    """
+    Reconstruct symmetric Q of shape (n, n) from its duplicate-free form (n(n+1)/2,).
+    """
+    Q = torch.zeros((nmodes, nmodes), dtype=Q_unique.dtype, device=Q_unique.device)
+
+    tril_indices = torch.triu_indices(nmodes, nmodes)  # upper triangle
+    Q[tril_indices[0], tril_indices[1]] = Q_unique
+    Q = Q + Q.T - torch.diag(Q.diag())  # symmetrize
+    return Q
+
+def train_SROpInf(model: SymmetryReducedBilinearROM,
                   num_modes: int, data: TrajectoryData, batch_size: int = None, loss_fn: Callable = torch.nn.MSELoss(),
-                  reg_coeffs: List[float] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-                  max_steps: int = 1000, grad_tol: float = 1e-6) -> SymmetryReducedQuadraticOpInfROM:
+                  reg_coeffs: List[float] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], ratio: float = 1.0,
+                  max_steps: int = 1000, grad_tol: float = 1e-6) -> SymmetryReducedBilinearROM:
     """
     Trains SR-OpInf model using data from a TrajectoryData object.
 
     Args:
-        model: Instance of SymmetryReducedQuadraticOpInfROM to be trained.
+        model: Instance of SymmetryReducedBilinearROM to be trained.
         num_modes: Number of modes for the reduced model.
         data: Instance of TrajectoryData.
         loss_fn: A callable computing the total loss from prediction and targets.
@@ -49,64 +55,74 @@ def train_SROpInf(model: SymmetryReducedQuadraticOpInfROM,
     """
 
     # Step 1: Extract & preprocess
-
-    test_basis = torch.tensor(model.test_basis, dtype=torch.double)
-    u_bias = torch.tensor(model.bias, dtype=torch.double)
-
     loader = DataLoader(data, batch_size=batch_size or len(data), shuffle=False)
     for batch in loader:
         u_fitted_batch, rhs_fitted_batch, cdot_batch = batch
         u_fitted_batch = u_fitted_batch.T
         rhs_fitted_batch = rhs_fitted_batch.T
 
-        state_batch = test_basis.T @ (u_fitted_batch - u_bias[:, np.newaxis]) / test_basis.shape[0]
-        state_quadratic_batch = duplicate_free_quadratic_vector(state_batch)
-        rhs_fitted_latent_batch = full_to_latent_rhs(rhs_fitted_batch, test_basis)
+        # state_batch = test_basis.T @ (u_fitted_batch - u_bias[:, np.newaxis]) / test_basis.shape[0]
+        state_batch = model.full_to_latent(u_fitted_batch)
+        # state_quadratic_batch = duplicate_free_quadratic_vector(state_batch)
+        # rhs_fitted_latent_batch = full_to_latent_rhs(rhs_fitted_batch, test_basis)
+        rhs_fitted_latent_batch = model.full_to_latent_rhs(rhs_fitted_batch)
         dudx_fitted_batch = model.derivative(u_fitted_batch, order=1)
-        dudx_fitted_latent_batch = full_to_latent_rhs(dudx_fitted_batch, test_basis)
+        dudx_fitted_latent_batch = model.full_to_latent_rhs(dudx_fitted_batch)
 
     # Convert to tensors (no need to do so perhaps, we already use DataLoader to get tensor data)
 
-    num_quad = state_quadratic_batch.shape[0]
+    num_quadratic_unique = num_modes * (num_modes + 1) // 2
 
     # Step 2: Initialize trainable matrices
 
     d_rom = torch.nn.Parameter(torch.zeros(num_modes, dtype=torch.double))
-    B_rom = torch.nn.Parameter(torch.zeros(num_modes, num_modes, dtype=torch.double))
-    H_rom = torch.nn.Parameter(torch.zeros(num_modes, num_quad, dtype=torch.double))
-    e_rom = torch.nn.Parameter(torch.zeros(1, dtype=torch.double))
+    A_rom = torch.nn.Parameter(torch.zeros(num_modes, num_modes, dtype=torch.double))
+    B_rom_duplicate_free = torch.nn.Parameter(torch.zeros(num_modes, num_quadratic_unique, dtype=torch.double))
+    e_rom = torch.nn.Parameter(torch.tensor(0.0, dtype=torch.double))
     p_rom = torch.nn.Parameter(torch.zeros(num_modes, dtype=torch.double))
-    q_rom = torch.nn.Parameter(torch.zeros(num_quad, dtype=torch.double))
+    Q_rom_duplicate_free = torch.nn.Parameter(torch.zeros(num_quadratic_unique, dtype=torch.double))
 
-    trainables = [d_rom, B_rom, H_rom, e_rom, p_rom, q_rom]
+    trainables = [d_rom, A_rom, B_rom_duplicate_free, e_rom, p_rom, Q_rom_duplicate_free]
 
     optimizer = torch.optim.LBFGS(trainables, line_search_fn='strong_wolfe', max_iter=10, history_size=20)
 
-    w_rom = torch.tensor(model.w_rom, dtype=torch.double)
-    s_rom = torch.tensor(model.s_rom, dtype=torch.double)
-    n_rom = torch.tensor(model.n_rom, dtype=torch.double)
-    M_rom = torch.tensor(model.M_rom, dtype=torch.double)
+    model.cdot_denom_constant = torch.tensor(model.cdot_denom_constant, dtype=torch.double)
+    model.cdot_denom_linear = torch.tensor(model.cdot_denom_linear, dtype=torch.double)
+    model.udx_constant = torch.tensor(model.udx_constant, dtype=torch.double).view(-1, 1)
+    model.udx_linear = torch.tensor(model.udx_linear, dtype=torch.double)
 
     training_loss_history = []
 
     def closure():
         optimizer.zero_grad()
 
-        rhs_fitted_rom = H_rom @ state_quadratic_batch + B_rom @ state_batch + d_rom.view(-1, 1)
-        cdot_rom = - (q_rom @ state_quadratic_batch + p_rom @ state_batch + e_rom) / (s_rom @ state_batch + w_rom)
-        dudx_fitted_latent_rom = M_rom @ state_batch + n_rom.view(-1, 1)
+        model.constant = d_rom.view(-1, 1)  # Ensure d_rom can be broadcasted correctly
+        model.linear_mat = A_rom
+        model.bilinear_mat = reconstruct_symmetric_rank3matrix(B_rom_duplicate_free, num_modes)
+        model.cdot_numer_constant = e_rom
+        model.cdot_numer_linear = p_rom
+        model.cdot_numer_bilinear = reconstruct_symmetric_matrix(Q_rom_duplicate_free, num_modes)
+
+        rhs_fitted_rom = model.velocity(state_batch)
+        cdot_rom       = model.shifting_speed(state_batch)
+        dudx_fitted_latent_rom = model.udx(state_batch)
 
         rhs_fitted_loss = torch.sum((rhs_fitted_rom - rhs_fitted_latent_batch) ** 2) # this loss function is then averaged over the number of batchwise snapshots only
         advection_loss = torch.sum((cdot_rom * dudx_fitted_latent_rom - cdot_batch * dudx_fitted_latent_batch) ** 2)
 
+        print("cdot_rom shape:", cdot_rom.shape)
+        print("dudx_fitted_latent_rom shape:", dudx_fitted_latent_rom.shape)
+        print("cdot_batch shape:", cdot_batch.shape)
+        print("dudx_fitted_latent_batch shape:", dudx_fitted_latent_batch.shape)
+
         regularizer = (reg_coeffs[0] * torch.norm(d_rom) ** 2
-                       + reg_coeffs[1] * torch.norm(B_rom) ** 2
-                       + reg_coeffs[2] * torch.norm(H_rom) ** 2
+                       + reg_coeffs[1] * torch.norm(A_rom) ** 2
+                       + reg_coeffs[2] * torch.norm(B_rom_duplicate_free) ** 2
                        + reg_coeffs[3] * torch.norm(e_rom) ** 2
                        + reg_coeffs[4] * torch.norm(p_rom) ** 2
-                       + reg_coeffs[5] * torch.norm(q_rom) ** 2)
-        
-        loss = rhs_fitted_loss + advection_loss + regularizer
+                       + reg_coeffs[5] * torch.norm(Q_rom_duplicate_free) ** 2)
+
+        loss = rhs_fitted_loss + ratio * advection_loss + regularizer
         loss.backward()
         print("velocity loss:", rhs_fitted_loss.item(), "advection loss", advection_loss.item(), "Regularizer loss:", regularizer.item())
         return loss
@@ -124,12 +140,16 @@ def train_SROpInf(model: SymmetryReducedQuadraticOpInfROM,
             break
 
     # Step 4: Save learned model
-    model.constant_vector = d_rom.detach().numpy()
-    model.linear_matrix = B_rom.detach().numpy()
-    model.quadratic_matrix = H_rom.detach().numpy()
-    model.shifting_speed_numer_constant = e_rom.detach().item()
-    model.shifting_speed_numer_linear_vector = p_rom.detach().numpy()
-    model.shifting_speed_numer_quadratic_vector = q_rom.detach().numpy()
+    model.constant = d_rom.detach().numpy()
+    model.linear_mat = A_rom.detach().numpy()
+    model.bilinear_mat = reconstruct_symmetric_rank3matrix(B_rom_duplicate_free.detach(), num_modes).numpy()
+    model.cdot_numer_constant = e_rom.detach().item()
+    model.cdot_numer_linear = p_rom.detach().numpy()
+    model.cdot_numer_bilinear = reconstruct_symmetric_matrix(Q_rom_duplicate_free.detach(), num_modes).numpy()
+    model.cdot_denom_constant = model.cdot_denom_constant.item()
+    model.cdot_denom_linear = model.cdot_denom_linear.detach().numpy()
+    model.udx_constant = model.udx_constant.detach().numpy().flatten()
+    model.udx_linear = model.udx_linear.detach().numpy()
 
     # Plot loss
 

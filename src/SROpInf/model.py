@@ -2,47 +2,25 @@
 
 from numbers import Number
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from typing import Callable, Optional, Union
 
 import numpy as np
-from torch import Tensor, einsum
+import torch
+from torch import Tensor, einsum, from_numpy
 from numpy.typing import ArrayLike
 from scipy.linalg import lu_factor, lu_solve
 
 from .timestepper import Timestepper, AdaptiveTimestepper, SemiImplicit
 from .custom_typing import Vector, Matrix, VectorField, VectorList
 
-__all__ = ["LUSolver", "Model", "SemiLinearModel", "BilinearModel", "duplicate_free_quadratic_vector"]
+__all__ = ["LUSolver", "Model", "SemiLinearModel", "BilinearModel", "BilinearReducedOrderModel", "SymmetryReducedBilinearROM"]
 
 def inner_product(a: Vector, b: Vector) -> float:
     """Compute the inner product of two vectors."""
     return np.dot(a, np.conj(b)) / len(a)
 
 def is_scalar(x):
-    return isinstance(x, (Number, np.generic)) or (isinstance(x, Tensor) and x.ndim == 0)
-
-def duplicate_free_quadratic_vector(v: Union[Vector, ArrayLike]) -> Union[Vector, ArrayLike]:   
-    """Return a vector with duplicate entries removed, keeping the first occurrence.
-
-    Args:
-        v(Vector): input vector
-
-    Returns:
-        Vector: a vector (v \kron v) with duplicate entries removed
-    """
-    if v.ndim == 1:
-        N = len(v)
-        # get the i,j pairs for i ≤ j
-        i, j = np.triu_indices(N)
-        return v[i] * v[j]
-    elif v.ndim == 2:
-        N, _ = v.shape
-        # get the i,j pairs for i ≤ j
-        i, j = np.triu_indices(N)
-        return v[i, :] * v[j, :]
-    else:
-        raise ValueError("Input v must be a 1D or 2D array-like object.")
+    return isinstance(x, (Number, np.generic)) or (isinstance(x, Tensor) and x.ndim == 0) or (isinstance(x, np.ndarray) and x.size == 1)
 class LUSolver:
     """A class for solving linear systems A x = b
 
@@ -100,8 +78,7 @@ class Model(ABC):
                     f"Available explicit timesteppers: {available_explicit}. "
                     "Alternatively, try the subclass 'SemiLinearModel' with semi-implicit timesteppers:"
                     f"{available_semiimplicit}."
-                )
-                
+                )         
 class SemiLinearModel(Model):
     """Abstract base class for semi-linear models.
 
@@ -140,7 +117,6 @@ class SemiLinearModel(Model):
             return stepper
         except NotImplementedError:
             return super().get_timestepper(method, dt, err_tol)
-
 class BilinearModel(SemiLinearModel):
     """Model where the right-hand side is a bilinear function of the state
 
@@ -170,7 +146,7 @@ class BilinearModel(SemiLinearModel):
         """Evaluate the linear term B x"""
         return self._linear.dot(x)
 
-    def get_solver(self, alpha: float) -> Callable[[Vector], Vector]:
+    def get_solver(self, alpha: float) -> VectorField:
         mat = np.eye(self._linear.shape[0]) - alpha * self._linear
         return LUSolver(mat)
 
@@ -365,7 +341,7 @@ class BilinearModel(SemiLinearModel):
         return SRBilinearGalerkinROM
     
     def symmetry_reduced_OpInf_initialization(self, V: VectorList, template: Vector, W: Optional[VectorList] = None,
-                                bias: Optional[Vector] = None) -> "SymmetryReducedQuadraticOpInfROM":
+                                bias: Optional[Vector] = None) -> "SymmetryReducedBilinearROM":
         """
         Create the template for the symmetry-reduced OpInf ROM,
         with all known reduced matrices precomputed.
@@ -425,7 +401,7 @@ class BilinearModel(SemiLinearModel):
         Phi_dx = V_dx
         Psi = np.linalg.solve((V.T @ W).T, W.T).T * N
 
-        w_proj = np.dot(bias_dx, template_dx) / len(template_dx)
+        w_proj = inner_product(bias_dx, template_dx)
         s_proj = np.zeros(n)
         n_proj = np.zeros(n)
         M_proj = np.zeros((n, n))
@@ -437,7 +413,7 @@ class BilinearModel(SemiLinearModel):
             for j in range(n):
                 M_proj[i, j] = inner_product(Phi_dx[:, j], psi_i)
 
-        SRBilinearOpInfROM = SymmetryReducedQuadraticOpInfROM(Phi, Psi, bias, w_proj, s_proj, n_proj, M_proj)
+        SRBilinearOpInfROM = SymmetryReducedBilinearROM(Phi, Psi, bias, w_proj, s_proj, n_proj, M_proj)
         
         for attr in ['derivative']:  # add others here
             if hasattr(self, attr):
@@ -467,19 +443,36 @@ class BilinearReducedOrderModel(BilinearModel):
         self._bias = np.array(bias) if bias is not None else np.zeros(self._linear.shape[0])
         self.state_dim = self.Phi.shape[1]
     
-    def full_to_latent(self, x: ArrayLike) -> ArrayLike:
-        """Convert full state x to latent state a."""
-
+    def full_to_latent(self, x: Union[ArrayLike, Tensor]) -> Union[ArrayLike, Tensor]:
+        """Convert full state x to latent state a, if x is a torch tensor, return a torch tensor."""
+        is_torch_tensor = isinstance(x, Tensor)
+        if is_torch_tensor:
+            x = x.detach().cpu().numpy()
         if x.ndim == 1:
-            return self.test_basis.T @ (x - self.bias) / self.test_basis.shape[0]
+            a = self.test_basis.T @ (x - self.bias) / self.test_basis.shape[0]
         elif x.ndim == 2:
-            return self.test_basis.T @ (x - self.bias[:, np.newaxis]) / self.test_basis.shape[0]
+            a = self.test_basis.T @ (x - self.bias[:, np.newaxis]) / self.test_basis.shape[0]
         else:
             raise ValueError("Input x must be 1D or 2D.")
-        
+
+        return from_numpy(a) if is_torch_tensor else a
+    
+    def full_to_latent_rhs(self, dxdt: Union[ArrayLike, Tensor]) -> Union[ArrayLike, Tensor]:
+        """Convert full velocity dxdt to latent state dadt, if dxdt is a torch tensor, return a torch tensor."""
+        is_torch_tensor = isinstance(dxdt, Tensor)
+        if is_torch_tensor:
+            dxdt = dxdt.detach().cpu().numpy()
+        if dxdt.ndim == 1:
+            dadt = self.test_basis.T @ dxdt / self.test_basis.shape[0]
+        elif dxdt.ndim == 2:
+            dadt = self.test_basis.T @ dxdt/ self.test_basis.shape[0]
+        else:
+            raise ValueError("Input x must be 1D or 2D.")
+
+        return from_numpy(dadt) if is_torch_tensor else dadt
+
     def latent_to_full(self, a: ArrayLike) -> ArrayLike:
-        """Convert latent state a to full state x."""
-        
+        """Convert latent state a to full state x. We won't use this during the offline training so no need to convert to Torch Tensor."""
         if a.ndim == 1:
             return self.bias + self.trial_basis @ a
         elif a.ndim == 2:
@@ -540,8 +533,8 @@ class SymmetryReducedBilinearROM(BilinearReducedOrderModel):
 
     def __init__(self, Phi: ArrayLike, Psi: ArrayLike, bias: Vector,
                  w_rom: float, s_rom: Vector, n_rom: Vector, M_rom: Matrix,
-                 d_rom: Vector, A_rom: Matrix, B_rom: Matrix,
-                 e_rom: float, p_rom: Vector, Q_rom: Matrix):
+                 d_rom: Vector = None, A_rom: Matrix = None, B_rom: Matrix = None,
+                 e_rom: float = None, p_rom: Vector = None, Q_rom: Vector = None):
         super().__init__(Phi, Psi, bias, d_rom, A_rom, B_rom)
         self._cdot_numer_constant = e_rom
         self._cdot_numer_linear = p_rom
@@ -582,7 +575,7 @@ class SymmetryReducedBilinearROM(BilinearReducedOrderModel):
         First we check the shapes, then we check the types"""
         if self.linear_mat.shape[1] != a.shape[0]:
                 raise ValueError(f"Incompatible shapes: {self.linear_mat.shape} @ {a.shape}")
-        if isinstance(a, Vector) and isinstance(self.linear_mat, Matrix):
+        if isinstance(a, np.ndarray) and isinstance(self.linear_mat, np.ndarray):
             return self.linear_mat.dot(a)
         elif isinstance(a, Tensor) and isinstance(self.linear_mat, Tensor):
             return self.linear_mat @ a
@@ -605,10 +598,10 @@ class SymmetryReducedBilinearROM(BilinearReducedOrderModel):
         """Evaluate the bilinear term B_rom(a, b) = einsum('ijk,j,k->i', B, a, b)"""
         if self.bilinear_mat.shape[1] != a.shape[0] or self.bilinear_mat.shape[2] != b.shape[0]:
                 raise ValueError(f"Incompatible shapes: {self.bilinear_mat.shape} with a: {a.shape}, b: {b.shape}")
-        if isinstance(a, Vector) and isinstance(b, Vector) and isinstance(self.bilinear_mat, Matrix):
+        if isinstance(a, np.ndarray) and isinstance(b, np.ndarray) and isinstance(self.bilinear_mat, np.ndarray):
             return self.bilinear_mat.dot(a).dot(b)
         elif isinstance(a, Tensor) and isinstance(b, Tensor) and isinstance(self.bilinear_mat, Tensor):
-            return einsum('ijk,j,k->i', self.bilinear_mat, a, b)
+            return einsum('ijk,jn,kn->in', self.bilinear_mat, a, b)
         else:
             raise ValueError(f"Incompatible types for B(a, b): got a: {type(a)}, b: {type(b)}, B: {type(self.bilinear_mat)}.")
 
@@ -620,7 +613,7 @@ class SymmetryReducedBilinearROM(BilinearReducedOrderModel):
     @cdot_numer_constant.setter
     def cdot_numer_constant(self, value: Union[float, Tensor]):
         """Set the numerator constant term e_rom in the numerator of the shifting speed"""
-        if not np.isscalar(value):
+        if not is_scalar(value):
             raise ValueError(f"Numerator constant must be a scalar, got {value}.")
         self._cdot_numer_constant = value
 
@@ -653,27 +646,55 @@ class SymmetryReducedBilinearROM(BilinearReducedOrderModel):
         """Return the denominator constant term w_rom in the denominator of the shifting speed"""
         return self._cdot_denom_constant
     
+    @cdot_denom_constant.setter
+    def cdot_denom_constant(self, value: Union[float, Tensor]):
+        """Set the denominator constant term w_rom in the denominator of the shifting speed"""
+        if not is_scalar(value):
+            raise ValueError(f"Denominator constant must be a scalar, got {value}.")
+        self._cdot_denom_constant = value
+    
     @property
     def cdot_denom_linear(self) -> Union[Vector, Tensor]:
         """Return the denominator linear term s_rom in the denominator of the shifting speed"""
         return self._cdot_denom_linear
+    
+    @cdot_denom_linear.setter
+    def cdot_denom_linear(self, value: Union[Vector, Tensor]):
+        """Set the denominator linear term s_rom in the denominator of the shifting speed"""
+        if value.shape[0] != self.state_dim:
+            raise ValueError(f"Denominator linear vector must have shape ({self.state_dim},), got {value.shape}.")
+        self._cdot_denom_linear = value
 
     @property
     def udx_constant(self) -> Union[Vector, Tensor]:
         """Return the spatial derivative constant term n_rom"""
         return self._udx_constant
     
+    @udx_constant.setter
+    def udx_constant(self, value: Union[Vector, Tensor]):
+        """Set the spatial derivative constant term n_rom"""
+        if value.shape[0] != self.state_dim:
+            raise ValueError(f"Spatial derivative constant must have shape ({self.state_dim},), got {value.shape}.")
+        self._udx_constant = value
+    
     @property
     def udx_linear(self) -> Union[Matrix, Tensor]:
         """Return the spatial derivative linear term M_rom"""
         return self._udx_linear
+    
+    @udx_linear.setter
+    def udx_linear(self, value: Union[Matrix, Tensor]):
+        """Set the spatial derivative linear term M_rom"""
+        if value.shape[0] != self.state_dim or value.shape[1] != self.state_dim:
+            raise ValueError(f"Spatial derivative linear matrix must have shape ({self.state_dim}, {self.state_dim}), got {value.shape}.")
+        self._udx_linear = value
 
     def udx(self, a: Union[Vector, Tensor]) -> Union[Vector, Tensor]:
         """Evaluate the spatial derivative term: n_rom + M_rom @ a, supporting both NumPy and Torch."""
         if self.udx_linear.shape[1] != a.shape[0] or self.udx_constant.shape[0] != a.shape[0]:
                 raise ValueError(f"Incompatible shapes: {self.udx_linear.shape} @ {a.shape} + {self.udx_constant.shape}")
-        if isinstance(a, Vector) and isinstance(self.udx_constant, Vector) and isinstance(self.udx_linear, Matrix):
-            return self.udx_constant + self.udx_linear @ a
+        if isinstance(a, np.ndarray) and isinstance(self.udx_constant, np.ndarray) and isinstance(self.udx_linear, np.ndarray):
+            return self.udx_constant + self.udx_linear.dot(a)
         elif isinstance(a, Tensor) and isinstance(self.udx_linear, Tensor) and isinstance(self.udx_constant, Tensor):
             return self.udx_constant + self.udx_linear @ a
         else:
@@ -684,14 +705,29 @@ class SymmetryReducedBilinearROM(BilinearReducedOrderModel):
             raise ValueError(f"Incompatible shapes for cdot_numerator: {self.cdot_numer_linear.shape} @ {a.shape} + {self.cdot_numer_bilinear.shape}({a.shape}, {a.shape})")
         if self.cdot_denom_linear.shape[0] != a.shape[0]:
             raise ValueError(f"Incompatible shapes for cdot_denominator: {self.cdot_denom_linear.shape} @ {a.shape}")
-        
-        if isinstance(a, Vector) and isinstance(self.cdot_numer_constant, float) and isinstance(self.cdot_numer_linear, Vector) and isinstance(self.cdot_numer_bilinear, Matrix):
-            self.cdot_numerator   = self.cdot_numer_constant + self.cdot_numer_linear.dot(a) + self.cdot_numer_bilinear.dot(a).dot(a)
-        elif isinstance(a, Tensor) and isinstance(self.cdot_numer_constant, Tensor) and isinstance(self.cdot_numer_linear, Tensor) and isinstance(self.cdot_numer_bilinear, Tensor):
-            self.cdot_numerator   = self.cdot_numer_constant + self.cdot_numer_linear @ a + einsum('ij,j,k->i', self.cdot_numer_bilinear, a, a)
-        self.cdot_numerator   = self.cdot_numer_constant + self.cdot_numer_linear.dot(a) + self.cdot_numer_bilinear.dot(a).dot(a)
-        self.cdot_denominator = self.cdot_denom_constant + self.cdot_denom_linear.dot(a)
-        if np.abs(self.cdot_denominator) > self.shifting_speed_denom_threshold:
+
+        if isinstance(a, np.ndarray) and is_scalar(self.cdot_numer_constant) and isinstance(self.cdot_numer_linear, np.ndarray) and isinstance(self.cdot_numer_bilinear, np.ndarray):
+            self.cdot_numerator = self.cdot_numer_constant + self.cdot_numer_linear.dot(a) + self.cdot_numer_bilinear.dot(a).dot(a)
+        elif isinstance(a, Tensor) and is_scalar(self.cdot_numer_constant) and isinstance(self.cdot_numer_linear, Tensor) and isinstance(self.cdot_numer_bilinear, Tensor):
+            self.cdot_numerator   = self.cdot_numer_constant + self.cdot_numer_linear @ a + einsum('ij,jn,kn->n', self.cdot_numer_bilinear, a, a)
+        else:
+            raise TypeError(f"Incompatible types for cdot_numerator: got a: {type(a)}, constant: {type(self.cdot_numer_constant)}, linear: {type(self.cdot_numer_linear)}, bilinear: {type(self.cdot_numer_bilinear)}.")
+
+        if isinstance(a, np.ndarray) and is_scalar(self.cdot_denom_constant) and isinstance(self.cdot_denom_linear, np.ndarray):
+            self.cdot_denominator = self.cdot_denom_constant + self.cdot_denom_linear.dot(a)
+        elif isinstance(a, Tensor) and is_scalar(self.cdot_denom_constant) and isinstance(self.cdot_denom_linear, Tensor):
+            self.cdot_denominator = self.cdot_denom_constant + self.cdot_denom_linear @ a
+        else:
+            raise TypeError(f"Incompatible types for cdot_denominator: got a: {type(a)}, constant: {type(self.cdot_denom_constant)}, linear: {type(self.cdot_denom_linear)}.")
+  
+        if isinstance(self.cdot_numerator, Tensor) and isinstance(self.cdot_denominator, Tensor):
+            condition = torch.all(torch.abs(self.cdot_denominator) > self.shifting_speed_denom_threshold)
+        elif is_scalar(self.cdot_numerator) and is_scalar(self.cdot_denominator):
+            condition = np.abs(self.cdot_denominator) > self.shifting_speed_denom_threshold
+        else:
+            raise TypeError(f"Incompatible types for condition check: numerator: {type(self.cdot_numerator)}, denominator: {type(self.cdot_denominator)}.")
+
+        if condition:
             return - self.cdot_numerator / self.cdot_denominator
         else:
             raise ValueError(f"Denominator in shifting speed is less than {self.shifting_speed_denom_threshold}, cannot compute the shifting speed.")
@@ -710,92 +746,3 @@ class SymmetryReducedBilinearROM(BilinearReducedOrderModel):
 
     #     u_template_dx = self.derivative(u_template, order=1)
     #     return np.dot(u, u_template_dx) / len(u)
-
-class SymmetryReducedQuadraticOpInfROM(SymmetryReducedBilinearROM):
-    """ROMs for the SRBilinearModel where the right-hand side is a quadratic function of the reduced state
-
-    Models have the form
-
-        a' = d_rom + B_rom a + H_rom a^2 - cdot * (n_rom + M_rom a)
-
-    """
-    def __init__(self, Phi: ArrayLike, Psi: ArrayLike, bias: Vector,
-                 w_rom: float, s_rom: Vector, n_rom: Vector, M_rom: Matrix,
-                 d_rom: Vector = None, B_rom: Matrix = None, H_rom: Matrix = None,
-                 e_rom: float = None, p_rom: Vector = None, q_rom: Vector = None):
-        
-        super().__init__(Phi, Psi, bias, w_rom, s_rom, n_rom, M_rom,
-                         d_rom, B_rom, H_rom, e_rom, p_rom, q_rom)
-        
-        self._quadratic = H_rom  # H_rom is now the quadratic term
-        self.q_rom = q_rom       # q_rom is the quadratic vector in the numerator of the shifting speed
-        self.quadratic_dim = self.state_dim * (self.state_dim + 1) // 2
-
-    def bilinear(self, *args, **kwargs) -> None:
-        """
-        Deprecated method.
-
-        This model uses a quadratic form instead of a bilinear form.
-        Calling this method is not supported. Use the `quadratic` method
-        for evaluating the nonlinear quadratic term.
-        """
-        raise NotImplementedError(
-            "The SR-OpInf model uses a quadratic term instead of a bilinear one. "
-            "Use the `quadratic` method to evaluate the nonlinear term."
-        )
-    
-    def shifting_speed_numer_bilinear_matrix(self, *args, **kwargs) -> None:
-        """
-        Deprecated method.
-
-        This model uses a quadratic form instead of a bilinear form.
-        Calling this method is not supported. Use the `quadratic` method
-        for evaluating the nonlinear quadratic term in the numerator of the shifting speed.
-        """
-        raise NotImplementedError(
-            "The SR-OpInf model uses a quadratic term instead of a bilinear one. "
-            "Use the `quadratic` method to evaluate the nonlinear term in the numerator of the shifting speed."
-        )
-
-    @property
-    def quadratic_matrix(self) -> Matrix:
-        """Return the quadratic matrix B."""
-        return self._quadratic
-    
-    @quadratic_matrix.setter
-    def quadratic_matrix(self, value: Matrix):
-        """Set the quadratic matrix B."""
-        if value.shape != (self.state_dim, self.quadratic_dim):
-            raise ValueError(f"Quadratic matrix must have shape ({self.state_dim}, {self.quadratic_dim}), got {value.shape}.")
-        self._quadratic = value
-
-    @property
-    def shifting_speed_numer_quadratic_vector(self) -> Vector:
-        """Return the quadratic term q_rom in the numerator of the shifting speed"""
-        return self.q_rom
-    
-    @shifting_speed_numer_quadratic_vector.setter
-    def shifting_speed_numer_quadratic_vector(self, value: Vector):
-        """Set the quadratic term q_rom in the numerator of the shifting speed"""
-        if value.shape != (self.quadratic_dim,):
-            raise ValueError(f"Numerator quadratic vector must have shape ({self.quadratic_dim},), got {value.shape}.")
-        self.q_rom = value
-
-    def quadratic(self, a: Vector) -> Vector:
-        """Evaluate the quadratic term H_rom a^2"""
-        a_quadratic = duplicate_free_quadratic_vector(a)
-        return self._quadratic.dot(a_quadratic)
-    
-    def compute_shifting_speed(self, a: Vector) -> float:
-        self.cdot_numerator = self.shifting_speed_numer_constant + np.dot(self.shifting_speed_numer_linear_vector, a) + np.dot(self.shifting_speed_numer_quadratic_vector, duplicate_free_quadratic_vector(a))
-        self.cdot_denominator = self.shifting_speed_denom_constant + np.dot(self.shifting_speed_denom_linear_vector, a)
-        if np.abs(self.cdot_denominator) < self.shifting_speed_denom_threshold:
-            raise ValueError(f"Denominator in shifting speed is less than {self.shifting_speed_denom_threshold}, cannot compute cdot.")
-        else:
-            return - self.cdot_numerator / self.cdot_denominator
-
-    def nonlinear(self, a: Vector) -> Vector:
-        """Return the nonlinear part N(a) = d_rom + B_rom a + H_rom(a, a) - cdot * (n_rom + M_rom a)"""
-        cdot = self.compute_shifting_speed(a)
-        return self.constant_vector + self.quadratic(a) + cdot * (self.spatial_derivative_constant_vector + self.spatial_derivative_linear_matrix.dot(a))
-    

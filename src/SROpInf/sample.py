@@ -6,7 +6,7 @@ from numpy.typing import ArrayLike, NDArray
 from torch.utils.data import Dataset
 
 from .custom_typing import Vector, VectorField
-from .model import BilinearModel, SymmetryReducedBilinearROM, SymmetryReducedQuadraticOpInfROM 
+from .model import BilinearModel, SymmetryReducedBilinearROM
 
 __all__ = ["POD", "template_fitting", "sample"]
 
@@ -164,7 +164,7 @@ class TrajectoryData(Dataset[Tuple[NDArray, NDArray, NDArray, float, float]]):
 
 def sample(num_traj: int, num_snapshots: int, u_init: ArrayLike, u_template: Vector,
     spatial_translation: Callable[[Vector, float], Vector],
-    model: Union[BilinearModel, SymmetryReducedBilinearROM, SymmetryReducedQuadraticOpInfROM],
+    model: Union[BilinearModel, SymmetryReducedBilinearROM],
     timestepper: str, timespan: float, timestep: float, err_tol: float = 1e-6,
     re_proj_option = False, V: ArrayLike = None, W: ArrayLike = None, bias: Vector = None) -> TrajectoryData:
     """
@@ -186,7 +186,7 @@ def sample(num_traj: int, num_snapshots: int, u_init: ArrayLike, u_template: Vec
     shifting_speed = np.zeros((num_snapshots, num_traj), dtype=float)
     shifting_amount = np.zeros((num_snapshots, num_traj), dtype=float)
 
-    if isinstance(model, SymmetryReducedBilinearROM) or isinstance(model, SymmetryReducedQuadraticOpInfROM):
+    if isinstance(model, SymmetryReducedBilinearROM):
         stepper = model.get_timestepper(method = timestepper, dt = timestep, err_tol = err_tol)
         for idx_traj in range(num_traj):
             print(f"Sampling trajectory {idx_traj + 1} of {num_traj} using {model.__class__.__name__} ...")
