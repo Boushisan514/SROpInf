@@ -2,7 +2,7 @@ import torch
 from torch.utils.data import DataLoader
 from torch import Tensor
 import matplotlib.pyplot as plt
-from typing import List, Callable
+from typing import List, Callable, Tuple
 
 from .model import SymmetryReducedBilinearROM
 from .sample import TrajectoryData
@@ -55,7 +55,13 @@ def train_SROpInf(model: SymmetryReducedBilinearROM,
     """
 
     # Step 1: Extract & preprocess
+    model.cdot_denom_constant = torch.tensor(model.cdot_denom_constant, dtype=torch.double)
+    model.cdot_denom_linear = torch.tensor(model.cdot_denom_linear, dtype=torch.double)
+    model.udx_constant = torch.tensor(model.udx_constant, dtype=torch.double).view(-1, 1)
+    model.udx_linear = torch.tensor(model.udx_linear, dtype=torch.double)
+
     loader = DataLoader(data, batch_size=batch_size or len(data), shuffle=False)
+
     for batch in loader:
         u_fitted_batch, rhs_fitted_batch, cdot_batch = batch
         u_fitted_batch = u_fitted_batch.T
@@ -72,7 +78,7 @@ def train_SROpInf(model: SymmetryReducedBilinearROM,
     # Convert to tensors (no need to do so perhaps, we already use DataLoader to get tensor data)
 
     num_quadratic_unique = num_modes * (num_modes + 1) // 2
-
+    
     # Step 2: Initialize trainable matrices
 
     d_rom = torch.nn.Parameter(torch.zeros(num_modes, dtype=torch.double))
@@ -84,17 +90,10 @@ def train_SROpInf(model: SymmetryReducedBilinearROM,
 
     trainables = [d_rom, A_rom, B_rom_duplicate_free, e_rom, p_rom, Q_rom_duplicate_free]
 
-    optimizer = torch.optim.LBFGS(trainables, line_search_fn='strong_wolfe', max_iter=10, history_size=20)
-
-    model.cdot_denom_constant = torch.tensor(model.cdot_denom_constant, dtype=torch.double)
-    model.cdot_denom_linear = torch.tensor(model.cdot_denom_linear, dtype=torch.double)
-    model.udx_constant = torch.tensor(model.udx_constant, dtype=torch.double).view(-1, 1)
-    model.udx_linear = torch.tensor(model.udx_linear, dtype=torch.double)
-
-    training_loss_history = []
-
     def closure():
-        optimizer.zero_grad()
+        for p in trainables:
+            if p.grad is not None:
+                p.grad.zero_()
 
         model.constant = d_rom.view(-1, 1)  # Ensure d_rom can be broadcasted correctly
         model.linear_mat = A_rom
@@ -123,19 +122,10 @@ def train_SROpInf(model: SymmetryReducedBilinearROM,
               "advection loss", advection_loss.item(),
               "Regularizer loss:", regularizer.item())
         return loss
-
-    # Step 3: Training loop
-    for step in range(max_steps):
-        loss = optimizer.step(closure)
-        training_loss_history.append(loss.item())
-
-        # Gradient norm
-        grad_norm = sum(torch.norm(p.grad).item() ** 2 for p in trainables if p.grad is not None) ** 0.5
-        print(f"[{step}] Loss = {loss.item():.6e}, Grad norm = {grad_norm:.6e}")
-        if grad_norm < grad_tol:
-            print(f"Converged at step {step}.")
-            break
-
+    
+    optimizer = ConjugateGradientOptimizer(params=trainables, closure=closure, max_steps=max_steps, grad_tol=grad_tol)
+    training_loss_history = optimizer.step()
+    
     # Step 4: Save learned model
     model.constant = d_rom.detach().numpy()
     model.linear_mat = A_rom.detach().numpy()
@@ -160,3 +150,94 @@ def train_SROpInf(model: SymmetryReducedBilinearROM,
     plt.show()
     
     return model, training_loss_history
+
+class ConjugateGradientOptimizer:
+    def __init__(self,
+                 params: List[torch.nn.Parameter],
+                 closure: Callable[[], torch.Tensor],
+                 max_steps: int = 1000,
+                 grad_tol: float = 1e-6):
+        
+        self.params = params
+        self.closure = closure
+        self.max_steps = max_steps
+        self.grad_tol = grad_tol
+
+    def flatten_params(self) -> torch.Tensor:
+        return torch.cat([p.data.view(-1) for p in self.params])
+
+    def flatten_grads(self) -> torch.Tensor:
+        return torch.cat([
+            p.grad.view(-1) if p.grad is not None else torch.zeros_like(p).view(-1)
+            for p in self.params
+        ])
+
+    def set_params_from_flat(self, flat_tensor: torch.Tensor):
+        pointer = 0
+        for p in self.params:
+            numel = p.numel()
+            p.data.copy_(flat_tensor[pointer:pointer + numel].view_as(p))
+            pointer += numel
+
+    def loss_and_grad(self, flat_params: torch.Tensor) -> Tuple[float, torch.Tensor]:
+        self.set_params_from_flat(flat_params)
+        loss = self.closure()
+        grad = self.flatten_grads()
+        return loss.item(), grad
+    
+    def compute_exact_hessian(self) -> torch.Tensor:
+        flat_params = self.flatten_params().clone().detach().requires_grad_(True)
+        self.set_params_from_flat(flat_params)
+        loss = self.closure()
+        grad = torch.autograd.grad(loss, flat_params, create_graph=True)[0]
+        n = grad.numel()
+        H = torch.zeros(n, n, dtype=flat_params.dtype, device=flat_params.device)
+        for i in range(n):
+            grad2 = torch.autograd.grad(grad[i], flat_params, retain_graph=True)[0]
+            H[i, :] = grad2
+        return H
+
+    def step(self):
+        # Flatten and detach current model parameters
+        x_k = self.flatten_params().clone().detach()
+        self.set_params_from_flat(x_k)
+
+        # Evaluate initial gradient and residual
+        loss, g_k = self.loss_and_grad(x_k)
+        r_k = -g_k.clone()
+        p_k = r_k.clone()
+        training_loss_history = [loss]
+
+        for k in range(self.max_steps):
+            # Use closure again to evaluate matrix-vector product approximation
+            # We compute A^T A p_k ≈ grad(x_k + ε p_k) - grad(x_k)
+            epsilon = 1e-8
+            self.set_params_from_flat(x_k + epsilon * p_k)
+            _, grad_eps = self.loss_and_grad(x_k + epsilon * p_k)
+
+            self.set_params_from_flat(x_k)
+            _, grad_ref = self.loss_and_grad(x_k)
+
+            # Approximate H p_k = (grad(x + εp) - grad(x)) / ε
+            Hp_k = (grad_eps - grad_ref) / epsilon
+
+            alpha_k = torch.dot(r_k, r_k) / torch.dot(p_k, Hp_k)
+            x_k = x_k + alpha_k * p_k
+            self.set_params_from_flat(x_k)
+
+            loss, _ = self.loss_and_grad(x_k)
+            training_loss_history.append(loss)
+
+            r_next = r_k - alpha_k * Hp_k
+            grad_norm = torch.norm(r_next).item()
+
+            print(f"[{k}] Loss = {loss:.6e}, Grad norm = {grad_norm:.6e}")
+            if grad_norm < self.grad_tol:
+                print("Converged.")
+                break
+
+            beta_k = torch.dot(r_next, r_next) / torch.dot(r_k, r_k)
+            p_k = r_next + beta_k * p_k
+            r_k = r_next
+
+        return training_loss_history

@@ -48,16 +48,16 @@ def main():
 
     FOM = KuramotoSivashinsky(nu, Nx, L)
 
-    # FOM_data = sample(num_traj = num_traj, num_snapshots = N_snapshots, u_init = u_init, 
-    #                   u_template = u_template, spatial_translation = shifting_operation,
-    #                   model = FOM, timestepper = "rk3cn", timespan = end_time - start_time, timestep = dt)
+    FOM_data = sample(num_traj = num_traj, num_snapshots = N_snapshots, u_init = u_init, 
+                      u_template = u_template, spatial_translation = shifting_operation,
+                      model = FOM, timestepper = "rk3cn", timespan = end_time - start_time, timestep = dt)
     
-    # sol_FOM = FOM_data.sol[:, :, 0]
-    # sol_fitted_FOM = FOM_data.sol_fitted[:, :, 0]
-    # shifting_amount_FOM = FOM_data.shifting_amount[:, 0]
-    # shifting_speed_FOM = FOM_data.shifting_speed[:, 0]
+    sol_FOM = FOM_data.sol[:, :, 0]
+    sol_fitted_FOM = FOM_data.sol_fitted[:, :, 0]
+    shifting_amount_FOM = FOM_data.shifting_amount[:, 0]
+    shifting_speed_FOM = FOM_data.shifting_speed[:, 0]
 
-    # # np.savetxt("ks_initial_condition_120.txt", sol_FOM[:, int(120/dt_snapshots)])
+    # np.savetxt("ks_initial_condition_120.txt", sol_FOM[:, int(120/dt_snapshots)])
 
     # fig, ax = plt.subplots()
     # ax.contourf(x, T, sol_FOM.T)
@@ -67,41 +67,39 @@ def main():
     # ax.set_title(f"Kuramoto-Sivashinsky solution, L = {L}, ({nmodes} Fourier modes)")
     # plt.show()
 
-    # np.savetxt("ks_solution_FOM.txt", sol_FOM)
-    # np.savetxt("ks_solution_fitted_FOM.txt", sol_fitted_FOM)
-    # np.savetxt("ks_solution_shifting_amount_FOM.txt", shifting_amount_FOM)
-    # np.savetxt("ks_solution_shifting_speed_FOM.txt", shifting_speed_FOM)
+    np.savetxt("ks_solution_FOM.txt", sol_FOM)
+    np.savetxt("ks_solution_fitted_FOM.txt", sol_fitted_FOM)
+    np.savetxt("ks_solution_shifting_amount_FOM.txt", shifting_amount_FOM)
+    np.savetxt("ks_solution_shifting_speed_FOM.txt", shifting_speed_FOM)
 
-    # FOM_data.save("ks_solution_FOM.npz")
+    FOM_data.save("ks_solution_FOM.npz")
 
     # endregion
 
     # region 2: compute the SR-Galerkin ROM solution
 
-    # num_modes = 4
+    num_modes = 4
 
-    # FOM_data = TrajectoryData.load("ks_solution_FOM.npz")
+    FOM_data = TrajectoryData.load("ks_solution_FOM.npz")
+ 
+    sol_fitted_FOM = np.loadtxt("ks_solution_fitted_FOM.txt")
+    sol_FOM        = np.loadtxt("ks_solution_FOM.txt")
 
-    # sol_fitted_FOM = np.loadtxt("ks_solution_fitted_FOM.txt")
-    # sol_FOM        = np.loadtxt("ks_solution_FOM.txt")
+    ubar, POD_basis, POD_singular_values = POD(sol_fitted_FOM, num_modes)
 
-    # ubar, POD_basis, POD_singular_values = POD(sol_fitted_FOM, num_modes)
+    # also, we first compute the projection error of FOM snapshots onto the POD basis
 
-    # # also, we first compute the projection error of FOM snapshots onto the POD basis
+    SR_Galerkin_ROM = FOM.symmetry_reduced_project(V = POD_basis, template = u_template, W = None, bias = ubar)
 
-    # SR_Galerkin_ROM = FOM.symmetry_reduced_project(V = POD_basis, template = u_template, W = None, bias = ubar)
-
-    # SR_Galerkin_ROM_data = sample(num_traj = num_traj, num_snapshots = N_snapshots, u_init = u_init,
-    #                               u_template = u_template, spatial_translation = shifting_operation,
-    #                               model = SR_Galerkin_ROM, timestepper = "rkf45", timespan = end_time - start_time,
-    #                               timestep = dt, err_tol = 1e-6)
+    SR_Galerkin_ROM_data = sample(num_traj = num_traj, num_snapshots = N_snapshots, u_init = u_init,
+                                  u_template = u_template, spatial_translation = shifting_operation,
+                                  model = SR_Galerkin_ROM, timestepper = "rkf45", timespan = end_time - start_time,
+                                  timestep = dt, err_tol = 1e-6)
     
-    # sol_SR_Galerkin_ROM = SR_Galerkin_ROM_data.sol[:, :, 0]
-    # sol_fitted_SR_Galerkin_ROM = SR_Galerkin_ROM_data.sol_fitted[:, :, 0]
-    # shifting_amount_SR_Galerkin_ROM = SR_Galerkin_ROM_data.shifting_amount[:, 0]
-    # shifting_speed_SR_Galerkin_ROM = SR_Galerkin_ROM_data.shifting_speed[:, 0]
-
-    # print("SR-Galerkin ROM bilinear matrix: ", SR_Galerkin_ROM._bilinear)
+    sol_SR_Galerkin_ROM = SR_Galerkin_ROM_data.sol[:, :, 0]
+    sol_fitted_SR_Galerkin_ROM = SR_Galerkin_ROM_data.sol_fitted[:, :, 0]
+    shifting_amount_SR_Galerkin_ROM = SR_Galerkin_ROM_data.shifting_amount[:, 0]
+    shifting_speed_SR_Galerkin_ROM = SR_Galerkin_ROM_data.shifting_speed[:, 0]
 
     # fig, ax = plt.subplots()
     # ax.contourf(x, T, sol_SR_Galerkin_ROM.T)
@@ -111,88 +109,31 @@ def main():
     # ax.set_title(f"Kuramoto-Sivashinsky solution, L = {L}, ({num_modes} POD modes)")
     # plt.show()
 
-    # relative_error_SRG = np.linalg.norm(sol_SR_Galerkin_ROM - sol_FOM) / np.linalg.norm(sol_FOM)
+    relative_error_SRG = np.linalg.norm(sol_SR_Galerkin_ROM - sol_FOM) / np.linalg.norm(sol_FOM)
 
-    # sol_fitted_FOM_projected = SR_Galerkin_ROM.latent_to_full(SR_Galerkin_ROM.full_to_latent(sol_fitted_FOM))
-    # projection_error = np.linalg.norm(sol_fitted_FOM - sol_fitted_FOM_projected) / np.linalg.norm(sol_fitted_FOM)
+    sol_fitted_FOM_projected = SR_Galerkin_ROM.latent_to_full(SR_Galerkin_ROM.full_to_latent(sol_fitted_FOM))
+    projection_error = np.linalg.norm(sol_fitted_FOM - sol_fitted_FOM_projected) / np.linalg.norm(sol_fitted_FOM)
 
-    # np.savetxt("ks_solution_SR_Galerkin_ROM.txt", sol_SR_Galerkin_ROM)
-    # np.savetxt("ks_solution_fitted_SR_Galerkin_ROM.txt", sol_fitted_SR_Galerkin_ROM)
-    # np.savetxt("ks_solution_shifting_amount_SR_Galerkin_ROM.txt", shifting_amount_SR_Galerkin_ROM)
-    # np.savetxt("ks_solution_shifting_speed_SR_Galerkin_ROM.txt", shifting_speed_SR_Galerkin_ROM)
-
-    # fig, ax = plt.subplots()
-    # ax.contourf(x, T, sol_SR_Galerkin_ROM.T)
-    # ax.set_xlim(0, L)
-    # ax.set_xlabel("x")
-    # ax.set_ylabel("t")
-    # ax.set_title(f"Kuramoto-Sivashinsky solution, L = {L}, ({num_modes} POD modes)")
-    # plt.show()
+    np.savetxt("ks_solution_SR_Galerkin_ROM.txt", sol_SR_Galerkin_ROM)
+    np.savetxt("ks_solution_fitted_SR_Galerkin_ROM.txt", sol_fitted_SR_Galerkin_ROM)
+    np.savetxt("ks_solution_shifting_amount_SR_Galerkin_ROM.txt", shifting_amount_SR_Galerkin_ROM)
+    np.savetxt("ks_solution_shifting_speed_SR_Galerkin_ROM.txt", shifting_speed_SR_Galerkin_ROM)
 
     # endregion
 
     # region 3: compute the SR-OpInf ROM solution without re-projection technique
 
-    # num_modes = 4
-    # sol_fitted_FOM = np.loadtxt("ks_solution_fitted_FOM.txt")
-    # sol_FOM        = np.loadtxt("ks_solution_FOM.txt")
-    # FOM_data       = TrajectoryData.load("ks_solution_FOM.npz")
-
-    # ubar, POD_basis, POD_singular_values = POD(sol_fitted_FOM, num_modes)
-
-    # SR_OpInf_ROM = FOM.symmetry_reduced_OpInf_initialization(V = POD_basis, template = u_template, W = None, bias = ubar)
-    # SR_OpInf_ROM, training_loss = train_SROpInf(model = SR_OpInf_ROM, num_modes = num_modes, data = FOM_data,
-    #                                             max_steps = 5000, grad_tol = 1e-6)
-    
-    # SR_OpInf_ROM_data = sample(num_traj = num_traj, num_snapshots = N_snapshots, u_init = u_init,
-    #                            u_template = u_template, spatial_translation = shifting_operation,
-    #                            model = SR_OpInf_ROM, timestepper = "rkf45", timespan = end_time - start_time,
-    #                            timestep = dt, err_tol = 1e-6)
-
-    # sol_SR_OpInf_ROM = SR_OpInf_ROM_data.sol[:, :, 0]
-    # sol_fitted_SR_OpInf_ROM = SR_OpInf_ROM_data.sol_fitted[:, :, 0]
-    # shifting_amount_SR_OpInf_ROM = SR_OpInf_ROM_data.shifting_amount[:, 0]
-    # shifting_speed_SR_OpInf_ROM = SR_OpInf_ROM_data.shifting_speed[:, 0]
-
-    # fig, ax = plt.subplots()
-    # ax.contourf(x, T, sol_SR_OpInf_ROM.T)
-    # ax.set_xlim(0, L)
-    # ax.set_xlabel("x")
-    # ax.set_ylabel("t")
-    # ax.set_title(f"Kuramoto-Sivashinsky solution, L = {L}, ({num_modes} POD modes)")
-    # plt.show()
-
-    # np.savetxt("SR_OpInf_ROM_wo_reproj_training_loss.txt", training_loss)
-    # np.savetxt("ks_solution_SR_OpInf_ROM_wo_reproj.txt", sol_SR_OpInf_ROM)
-    # np.savetxt("ks_solution_fitted_SR_OpInf_ROM_wo_reproj.txt", sol_fitted_SR_OpInf_ROM)
-    # np.savetxt("ks_solution_shifting_amount_SR_OpInf_ROM_wo_reproj.txt", shifting_amount_SR_OpInf_ROM)
-    # np.savetxt("ks_solution_shifting_speed_SR_OpInf_ROM_wo_reproj.txt", shifting_speed_SR_OpInf_ROM)
-
-    # relative_error_SRO_wo_reproj = np.linalg.norm(sol_SR_OpInf_ROM - sol_FOM) / np.linalg.norm(sol_FOM)
-
-    # endregion
-
-    # region 4: compute the SR-OpInf ROM solution with re-projection technique
-
-    num_modes = 4
+    # num_modes = 3
     sol_fitted_FOM = np.loadtxt("ks_solution_fitted_FOM.txt")
     sol_FOM        = np.loadtxt("ks_solution_FOM.txt")
     FOM_data       = TrajectoryData.load("ks_solution_FOM.npz")
+    max_steps      = 1000
 
     ubar, POD_basis, POD_singular_values = POD(sol_fitted_FOM, num_modes)
 
-    FOM_data_re_proj = TrajectoryData.load("ks_solution_FOM_re_proj.npz")
-
-    # FOM_data_re_proj = sample(num_traj = num_traj, num_snapshots = N_snapshots, u_init = u_init, 
-    #                   u_template = u_template, spatial_translation = shifting_operation,
-    #                   model = FOM, timestepper = "rk3cn", timespan = end_time - start_time, timestep = dt,
-    #                   re_proj_option = True, V = POD_basis, W = None, bias = ubar)
-    
-    # FOM_data_re_proj.save("ks_solution_FOM_re_proj.npz")
-    
     SR_OpInf_ROM = FOM.symmetry_reduced_OpInf_initialization(V = POD_basis, template = u_template, W = None, bias = ubar)
-    SR_OpInf_ROM, training_loss = train_SROpInf(model = SR_OpInf_ROM, num_modes = num_modes, data = FOM_data_re_proj,
-                                                max_steps = 5000, grad_tol = 1e-6)
+    SR_OpInf_ROM, training_loss = train_SROpInf(model = SR_OpInf_ROM, num_modes = num_modes, data = FOM_data,
+                                                max_steps = max_steps, grad_tol = 1e-6)
     
     SR_OpInf_ROM_data = sample(num_traj = num_traj, num_snapshots = N_snapshots, u_init = u_init,
                                u_template = u_template, spatial_translation = shifting_operation,
@@ -204,13 +145,63 @@ def main():
     shifting_amount_SR_OpInf_ROM = SR_OpInf_ROM_data.shifting_amount[:, 0]
     shifting_speed_SR_OpInf_ROM = SR_OpInf_ROM_data.shifting_speed[:, 0]
 
-    fig, ax = plt.subplots()
-    ax.contourf(x, T, sol_SR_OpInf_ROM.T)
-    ax.set_xlim(0, L)
-    ax.set_xlabel("x")
-    ax.set_ylabel("t")
-    ax.set_title(f"Kuramoto-Sivashinsky solution, L = {L}, ({num_modes} POD modes)")
-    plt.show()
+    # fig, ax = plt.subplots()
+    # ax.contourf(x, T, sol_SR_OpInf_ROM.T)
+    # ax.set_xlim(0, L)
+    # ax.set_xlabel("x")
+    # ax.set_ylabel("t")
+    # ax.set_title(f"Kuramoto-Sivashinsky solution, L = {L}, ({num_modes} POD modes)")
+    # plt.show()
+
+    np.savetxt("SR_OpInf_ROM_wo_reproj_training_loss.txt", training_loss)
+    np.savetxt("ks_solution_SR_OpInf_ROM_wo_reproj.txt", sol_SR_OpInf_ROM)
+    np.savetxt("ks_solution_fitted_SR_OpInf_ROM_wo_reproj.txt", sol_fitted_SR_OpInf_ROM)
+    np.savetxt("ks_solution_shifting_amount_SR_OpInf_ROM_wo_reproj.txt", shifting_amount_SR_OpInf_ROM)
+    np.savetxt("ks_solution_shifting_speed_SR_OpInf_ROM_wo_reproj.txt", shifting_speed_SR_OpInf_ROM)
+
+    relative_error_SRO_wo_reproj = np.linalg.norm(sol_SR_OpInf_ROM - sol_FOM) / np.linalg.norm(sol_FOM)
+
+    # endregion
+
+    # region 4: compute the SR-OpInf ROM solution with re-projection technique
+
+    # num_modes = 3
+    sol_fitted_FOM = np.loadtxt("ks_solution_fitted_FOM.txt")
+    sol_FOM        = np.loadtxt("ks_solution_FOM.txt")
+    FOM_data       = TrajectoryData.load("ks_solution_FOM.npz")
+
+    ubar, POD_basis, POD_singular_values = POD(sol_fitted_FOM, num_modes)
+
+    # FOM_data_re_proj = TrajectoryData.load("ks_solution_FOM_re_proj.npz")
+
+    FOM_data_re_proj = sample(num_traj = num_traj, num_snapshots = N_snapshots, u_init = u_init, 
+                      u_template = u_template, spatial_translation = shifting_operation,
+                      model = FOM, timestepper = "rk3cn", timespan = end_time - start_time, timestep = dt,
+                      re_proj_option = True, V = POD_basis, W = None, bias = ubar)
+    
+    FOM_data_re_proj.save("ks_solution_FOM_re_proj.npz")
+    
+    SR_OpInf_ROM = FOM.symmetry_reduced_OpInf_initialization(V = POD_basis, template = u_template, W = None, bias = ubar)
+    SR_OpInf_ROM, training_loss = train_SROpInf(model = SR_OpInf_ROM, num_modes = num_modes, data = FOM_data_re_proj,
+                                                max_steps = max_steps, grad_tol = 1e-6)
+    
+    SR_OpInf_ROM_data = sample(num_traj = num_traj, num_snapshots = N_snapshots, u_init = u_init,
+                               u_template = u_template, spatial_translation = shifting_operation,
+                               model = SR_OpInf_ROM, timestepper = "rkf45", timespan = end_time - start_time,
+                               timestep = dt, err_tol = 1e-6)
+
+    sol_SR_OpInf_ROM = SR_OpInf_ROM_data.sol[:, :, 0]
+    sol_fitted_SR_OpInf_ROM = SR_OpInf_ROM_data.sol_fitted[:, :, 0]
+    shifting_amount_SR_OpInf_ROM = SR_OpInf_ROM_data.shifting_amount[:, 0]
+    shifting_speed_SR_OpInf_ROM = SR_OpInf_ROM_data.shifting_speed[:, 0]
+
+    # fig, ax = plt.subplots()
+    # ax.contourf(x, T, sol_SR_OpInf_ROM.T)
+    # ax.set_xlim(0, L)
+    # ax.set_xlabel("x")
+    # ax.set_ylabel("t")
+    # ax.set_title(f"Kuramoto-Sivashinsky solution, L = {L}, ({num_modes} POD modes)")
+    # plt.show()
 
     relative_error_SRO_w_reproj = np.linalg.norm(sol_SR_OpInf_ROM - sol_FOM) / np.linalg.norm(sol_FOM)
     np.savetxt("SR_OpInf_ROM_w_reproj_training_loss.txt", training_loss)
@@ -220,10 +211,11 @@ def main():
     np.savetxt("ks_solution_shifting_amount_SR_OpInf_ROM_w_reproj.txt", shifting_amount_SR_OpInf_ROM)
     np.savetxt("ks_solution_shifting_speed_SR_OpInf_ROM_w_reproj.txt", shifting_speed_SR_OpInf_ROM)
 
-    print(f"Relative error of SR-OpInf ROM w/o re-proj: {relative_error_SRO_wo_reproj:.4e}")
-    print(f"Relative error of SR-OpInf ROM w/ re-proj: {relative_error_SRO_w_reproj:.4e}")
-    print(f"Relative error of SR-Galerkin ROM: {relative_error_SRG:.4e}")
-    print(f"Relative error of projected FOM snapshots: {projection_error:.4e}")
+    with open("relative error.txt", "w") as f:
+        f.write(f"Relative error of SR-OpInf ROM w/o re-proj: {relative_error_SRO_wo_reproj:.6e}\n")
+        f.write(f"Relative error of SR-OpInf ROM w/ re-proj: {relative_error_SRO_w_reproj:.6e}\n")
+        f.write(f"Relative error of SR-Galerkin ROM: {relative_error_SRG:.6e}\n")
+        f.write(f"Relative error of projected FOM snapshots: {projection_error:.6e}\n")
 
     # endregion
 
