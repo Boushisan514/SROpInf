@@ -184,18 +184,6 @@ class ConjugateGradientOptimizer:
         loss = self.closure()
         grad = self.flatten_grads()
         return loss.item(), grad
-    
-    def compute_exact_hessian(self) -> torch.Tensor:
-        flat_params = self.flatten_params().clone().detach().requires_grad_(True)
-        self.set_params_from_flat(flat_params)
-        loss = self.closure()
-        grad = torch.autograd.grad(loss, flat_params, create_graph=True)[0]
-        n = grad.numel()
-        H = torch.zeros(n, n, dtype=flat_params.dtype, device=flat_params.device)
-        for i in range(n):
-            grad2 = torch.autograd.grad(grad[i], flat_params, retain_graph=True)[0]
-            H[i, :] = grad2
-        return H
 
     def step(self):
         # Flatten and detach current model parameters
