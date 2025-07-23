@@ -253,7 +253,8 @@ def sample(num_traj: int, num_snapshots: int, u_init: ArrayLike, u_template: Vec
                     rhs_fitted[:, counter:, idx_traj] = np.inf
                     shifting_amount[counter:, idx_traj] = np.inf
                     shifting_speed[counter:, idx_traj] = np.inf
-                    break
+                    
+                    return TrajectoryData(sol, sol_fitted, rhs_fitted, shifting_speed, shifting_amount)
             
             distance_old_moment = np.abs(time - counter * dt_snapshots)
             distance_new_moment = np.abs(time - (counter + 1) * dt_snapshots)
